@@ -1,0 +1,6 @@
+# compiled lisp
+*.fasl
+*.fas
+
+# generated firmware
+output/*.uf2
