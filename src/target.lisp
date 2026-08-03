@@ -104,17 +104,45 @@
 
 ;;; Write target metadata with the CL build version injected
 (defun write-target-metadata (target-json output-json)
-  "Read TARGET-JSON and write OUTPUT-JSON with its version field set to
-the secd-lisp build version (from ASDF)."
-  (let ((version (secd-lisp-version)))
-    (with-open-file (in target-json :direction :input)
-      (let ((metadata (yason:parse in)))
-        (setf (gethash "version" metadata) version)
-        (with-open-file (out output-json :direction :output
-                             :if-exists :supersede)
-          (yason:encode metadata out)
-          (terpri out))))
+  "Read TARGET-JSON (a board definition) and write OUTPUT-JSON with its
+version field set to the secd-lisp build version (from ASDF).
+
+The board file references its chip via the \"chip\" field; the chip base
+metadata (targets/chips/<chip>.json) is merged underneath the board, so
+the output carries the full resolved target definition."
+  (let* ((version (secd-lisp-version))
+         (board (with-open-file (in target-json :direction :input)
+                  (yason:parse in)))
+         (chip-name (gethash "chip" board))
+         (board-dir (make-pathname :name nil :type nil
+                                   :defaults (pathname target-json)))
+         (chips-dir (merge-pathnames #p"../chips/" board-dir))
+         (chip-path (when chip-name
+                      (probe-file (merge-pathnames (format nil "~A.json" chip-name)
+                                                   chips-dir))))
+         (metadata (if chip-path
+                       (let ((chip (with-open-file (in chip-path :direction :input)
+                                      (yason:parse in))))
+                         (deep-merge-hash chip board))
+                       board)))
+    (setf (gethash "version" metadata) version)
+    (with-open-file (out output-json :direction :output
+                         :if-exists :supersede)
+      (yason:encode metadata out)
+      (terpri out))
     version))
+
+;;; Recursively merge OVERLAY hash table into BASE (string-keyed).
+;;; Nested hash tables are merged recursively; other values from
+;;; OVERLAY replace those in BASE. Returns BASE.
+(defun deep-merge-hash (base overlay)
+  (maphash (lambda (k v)
+             (let ((cur (gethash k base)))
+               (if (and cur (hash-table-p cur) (hash-table-p v))
+                   (deep-merge-hash cur v)
+                   (setf (gethash k base) v))))
+           overlay)
+  base)
 
 ;;; Check if feature is available
 (defun has-feature-p (feature)
