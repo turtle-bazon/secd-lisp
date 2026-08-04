@@ -3,7 +3,7 @@
 ;;;; Copyright (C) 2026
 ;;;; License: GPL3
 ;;;;
-;;;; Blinks the built-in LED on RP2040 (GPIO 25).
+;;;; Blinks the built-in LED on RP2040 (GPIO 25) a fixed number of times.
 
 ;; Initialize LED pin as output
 (defun led-init ()
@@ -17,13 +17,16 @@
 (defun led-off ()
   (gpio-write 25 0))
 
-;; Blink LED
+;; Blink LED (recursive countdown; no dotimes/loop-exit in the compiler yet)
 (defun blink (times delay)
-  (dotimes (i times)
-    (led-on)
-    (sleep delay)
-    (led-off)
-    (sleep delay)))
+  (if (> times 0)
+      (progn
+        (led-on)
+        (sleep delay)
+        (led-off)
+        (sleep delay)
+        (blink (- times 1) delay))
+      0))
 
 ;; Main program
 (defun main ()

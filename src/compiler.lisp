@@ -18,7 +18,8 @@
   (current-label 0 :type fixnum)
   (lambdas nil :type list)  ; For nested lambda compilation
   (functions (make-hash-table :test 'eq) :type hash-table)  ; name -> function body address
-  (primitives (make-hash-table :test 'eq) :type hash-table))  ; name -> primitive id
+  (primitives (make-hash-table :test 'eq) :type hash-table)  ; name -> primitive id
+  (scopes nil :type list))  ; lexical scopes: list of frames; each frame is a list of bound names (innermost frame first)
 
 ;;; Bytecode instructions (matching secd-machine bytecode.h)
 (defconstant +op-stop+ #x00)
@@ -101,13 +102,29 @@
     (t
      (error "Cannot compile literal: ~A" value))))
 
+;;; Resolve a bound variable name to its environment index
+(defun variable-index (context name)
+  "Return the environment index for a lexically bound NAME, or NIL if not bound."
+  (let ((running 0))  ; sizes of frames closer to the innermost scope
+    (dolist (frame (compilation-context-scopes context))
+      (let ((pos (position name frame)))
+        (when pos
+          (return-from variable-index (+ pos running))))
+      (incf running (length frame)))
+    nil))
+
 ;;; Compile a variable reference
 (defun compile-variable (context name)
   "Compile a variable reference."
-  ;; For now, just emit LDC with variable name
-  ;; In a real implementation, this would look up in environment
-  (emit-opcode context +op-ldc+)
-  (emit-u16 context (get-constant-index context name)))
+  (let ((idx (variable-index context name)))
+    (if idx
+        (progn
+          (emit-opcode context +op-ld+)
+          (emit-u16 context idx))
+        ;; Unresolved symbol: keep a placeholder constant reference.
+        (progn
+          (emit-opcode context +op-ldc+)
+          (emit-u16 context (get-constant-index context name))))))
 
 ;;; Symbols compiled directly to VM opcodes
 (defun builtin-opcode-p (name)
@@ -277,32 +294,41 @@
          ;; Remember where this lambda's code will be
          (push (cons addr-pos (length (compilation-context-code context)))
                (compilation-context-lambdas context))
-          ;; Compile body (discard intermediate results)
-          (loop for rest on body
-                for expr = (first rest)
-                do (compile-node context expr)
-                   (unless (null (rest rest))
-                     (emit-opcode context +op-pop+)))
-          ;; Emit RTN
-          (emit-opcode context +op-rtn+)
-          ;; Update the address to point at the function body
-          (let ((code-vec (compilation-context-code context)))
-            (setf (aref code-vec addr-pos)
-                  (logand (ash (+ addr-pos 2) -8) #xff))
-            (setf (aref code-vec (1+ addr-pos))
-                  (logand (+ addr-pos 2) #xff))))))
+         ;; Bind parameters: pop params off the S stack into the environment
+         (emit-opcode context +op-args+)
+         (emit-byte context (length params))
+         ;; Push a scope frame for the parameters
+         (push (copy-list params) (compilation-context-scopes context))
+         ;; Compile body (discard intermediate results)
+         (loop for rest on body
+               for expr = (first rest)
+               do (compile-node context expr)
+                  (unless (null (rest rest))
+                    (emit-opcode context +op-pop+)))
+         ;; Pop the parameter scope frame
+         (pop (compilation-context-scopes context))
+         ;; Emit RTN
+         (emit-opcode context +op-rtn+)
+         ;; Update the address to point at the function body
+         (let ((code-vec (compilation-context-code context)))
+           (setf (aref code-vec addr-pos)
+                 (logand (ash (+ addr-pos 2) -8) #xff))
+           (setf (aref code-vec (1+ addr-pos))
+                 (logand (+ addr-pos 2) #xff))))))
     
     ;; Defun
     (:defun
      (let* ((name-and-params (ast-node-value node))
             (name (car name-and-params))
-            (params (cdr name-and-params))
+            (params (second name-and-params))
             (body (ast-node-children node))
             ;; LDF opcode + 2 operand bytes precede the function body
             (body-start (+ (length (compilation-context-code context)) 3)))
-       ;; Compile as lambda and bind the name to its body address
-       (compile-node context (make-lambda-node params body))
-       (setf (gethash name (compilation-context-functions context)) body-start)))
+       ;; Register the name before compiling the body so a function can
+       ;; recurse on itself.
+       (setf (gethash name (compilation-context-functions context)) body-start)
+       ;; Compile as lambda
+       (compile-node context (make-lambda-node params body))))
     
     ;; If
     (:if
@@ -311,24 +337,30 @@
          (error "if requires exactly 3 arguments"))
        ;; Compile condition
        (compile-node context (first children))
-       ;; Emit conditional branch
+       ;; SEL <else_addr>: cond false jumps to else; true falls through.
        (emit-opcode context +op-sel+)
-       ;; Placeholder for then address
-       (let ((then-addr-pos (length (compilation-context-code context))))
-         (emit-u16 context 0) ; Placeholder
-         ;; Compile then branch
+       (let ((else-pos (length (compilation-context-code context))))
+         (emit-u16 context 0)              ; placeholder for else_addr
+         ;; Then branch (inline, executed when cond TRUE)
          (compile-node context (second children))
-         (emit-opcode context +op-join+)
-         ;; Update then address
-         (let ((else-addr-pos (length (compilation-context-code context))))
-           ;; Compile else branch
-           (compile-node context (third children))
-           (emit-opcode context +op-join+)
-           ;; Update placeholders
-           (setf (aref (compilation-context-code context) then-addr-pos)
-                 (logand (ash else-addr-pos -8) #xff))
-           (setf (aref (compilation-context-code context) (1+ then-addr-pos))
-                 (logand else-addr-pos #xff))))))
+         ;; Keep then value on stack, skip the else branch
+         (emit-opcode context +op-jmp+)
+         (let ((post-pos (length (compilation-context-code context))))
+           (emit-u16 context 0)           ;; placeholder for post
+           ;; Else address = first byte of the else branch
+           (let ((else-addr (length (compilation-context-code context))))
+             ;; Else branch (executed when cond FALSE)
+             (compile-node context (third children))
+             ;; Post = first byte after the whole conditional
+             (let ((post (length (compilation-context-code context))))
+               (setf (aref (compilation-context-code context) else-pos)
+                     (logand (ash else-addr -8) #xff))
+               (setf (aref (compilation-context-code context) (1+ else-pos))
+                     (logand else-addr #xff))
+               (setf (aref (compilation-context-code context) post-pos)
+                     (logand (ash post -8) #xff))
+               (setf (aref (compilation-context-code context) (1+ post-pos))
+                     (logand post #xff))))))))
     
     ;; When (if with implicit nil else)
     (:when
@@ -337,25 +369,28 @@
          (error "when requires at least 1 argument"))
        ;; Compile condition
        (compile-node context (first children))
-       ;; Emit conditional branch
+       ;; Emit conditional branch (false jumps to else)
        (emit-opcode context +op-sel+)
-       ;; Placeholder for then address
-       (let ((then-addr-pos (length (compilation-context-code context))))
-         (emit-u16 context 0) ; Placeholder
-         ;; Compile body
+       (let ((else-pos (length (compilation-context-code context))))
+         (emit-u16 context 0) ; Placeholder for else address
+         ;; Then body (executed when cond TRUE)
          (dolist (expr (rest children))
            (compile-node context expr))
-         (emit-opcode context +op-join+)
-         ;; Update then address
-         (let ((else-addr-pos (length (compilation-context-code context))))
+         (emit-opcode context +op-jmp+)
+         (let ((post-pos (length (compilation-context-code context))))
+           (emit-u16 context 0) ;; Placeholder for post
            ;; Else branch: push nil
-           (compile-literal context nil)
-           (emit-opcode context +op-join+)
-           ;; Update placeholders
-           (setf (aref (compilation-context-code context) then-addr-pos)
-                 (logand (ash else-addr-pos -8) #xff))
-           (setf (aref (compilation-context-code context) (1+ then-addr-pos))
-                 (logand else-addr-pos #xff))))))
+           (let ((else-addr (length (compilation-context-code context))))
+             (compile-literal context nil)
+             (let ((post (length (compilation-context-code context))))
+               (setf (aref (compilation-context-code context) else-pos)
+                     (logand (ash else-addr -8) #xff))
+               (setf (aref (compilation-context-code context) (1+ else-pos))
+                     (logand else-addr #xff))
+               (setf (aref (compilation-context-code context) post-pos)
+                     (logand (ash post -8) #xff))
+               (setf (aref (compilation-context-code context) (1+ post-pos))
+                     (logand post #xff))))))))
     
     ;; Unless (if with implicit nil then)
     (:unless
@@ -366,25 +401,28 @@
        (compile-node context (first children))
        ;; Emit NOT
        (emit-opcode context +op-not+)
-       ;; Emit conditional branch
+       ;; Emit conditional branch (false jumps to else)
        (emit-opcode context +op-sel+)
-       ;; Placeholder for then address
-       (let ((then-addr-pos (length (compilation-context-code context))))
-         (emit-u16 context 0) ; Placeholder
-         ;; Compile body
+       (let ((else-pos (length (compilation-context-code context))))
+         (emit-u16 context 0) ; Placeholder for else address
+         ;; Then body (executed when cond TRUE)
          (dolist (expr (rest children))
            (compile-node context expr))
-         (emit-opcode context +op-join+)
-         ;; Update then address
-         (let ((else-addr-pos (length (compilation-context-code context))))
+         (emit-opcode context +op-jmp+)
+         (let ((post-pos (length (compilation-context-code context))))
+           (emit-u16 context 0) ;; Placeholder for post
            ;; Else branch: push nil
-           (compile-literal context nil)
-           (emit-opcode context +op-join+)
-           ;; Update placeholders
-           (setf (aref (compilation-context-code context) then-addr-pos)
-                 (logand (ash else-addr-pos -8) #xff))
-           (setf (aref (compilation-context-code context) (1+ then-addr-pos))
-                 (logand else-addr-pos #xff))))))
+           (let ((else-addr (length (compilation-context-code context))))
+             (compile-literal context nil)
+             (let ((post (length (compilation-context-code context))))
+               (setf (aref (compilation-context-code context) else-pos)
+                     (logand (ash else-addr -8) #xff))
+               (setf (aref (compilation-context-code context) (1+ else-pos))
+                     (logand else-addr #xff))
+               (setf (aref (compilation-context-code context) post-pos)
+                     (logand (ash post -8) #xff))
+               (setf (aref (compilation-context-code context) (1+ post-pos))
+                     (logand post #xff))))))))
     
     ;; Let
     (:let
@@ -396,25 +434,32 @@
        ;; Emit ARGS to create environment
        (emit-opcode context +op-args+)
        (emit-byte context (length bindings))
+       ;; Scope frame for the let bindings (order matches ARGS binding order)
+       (push (mapcar #'first bindings) (compilation-context-scopes context))
        ;; Compile body
        (dolist (expr body)
-         (compile-node context expr))))
+         (compile-node context expr))
+       ;; Pop the let scope frame
+       (pop (compilation-context-scopes context))))
     
     ;; Let*
     (:let*
      (let ((bindings (first (ast-node-children node)))
            (body (rest (ast-node-children node))))
        ;; Compile bindings one by one
-       (let ((count 0))
-         (dolist (binding bindings)
-           (compile-node context (second binding)) ; Compile value
-           (incf count)
-           ;; Emit ARGS for each binding
-           (emit-opcode context +op-args+)
-           (emit-byte context 1)))
+       (dolist (binding bindings)
+         (compile-node context (second binding)) ; Compile value
+         ;; Emit ARGS for each binding
+         (emit-opcode context +op-args+)
+         (emit-byte context 1)
+         ;; Each binding is its own scope frame
+         (push (list (first binding)) (compilation-context-scopes context)))
        ;; Compile body
        (dolist (expr body)
-         (compile-node context expr))))
+         (compile-node context expr))
+       ;; Pop the let* scope frames
+       (dotimes (i (length bindings))
+         (pop (compilation-context-scopes context)))))
     
     ;; Cond
     (:cond
@@ -426,22 +471,27 @@
        (let ((clause (first clauses)))
          (compile-node context (first clause)) ; Condition
          (emit-opcode context +op-sel+)
-         ;; Placeholder for then address
-         (let ((then-addr-pos (length (compilation-context-code context))))
-           (emit-u16 context 0) ; Placeholder
-           ;; Compile then body
+         (let ((else-pos (length (compilation-context-code context))))
+           (emit-u16 context 0) ; Placeholder for else address
+           ;; Compile then body (executed when cond TRUE)
            (dolist (expr (rest clause))
              (compile-node context expr))
-           (emit-opcode context +op-join+)
-           ;; Update then address
-           (let ((else-addr-pos (length (compilation-context-code context))))
-             ;; Compile remaining clauses
-             (compile-node context (make-cond-node (rest clauses)))
-             ;; Update placeholders
-             (setf (aref (compilation-context-code context) then-addr-pos)
-                   (logand (ash else-addr-pos -8) #xff))
-             (setf (aref (compilation-context-code context) (1+ then-addr-pos))
-                   (logand else-addr-pos #xff)))))))
+           (emit-opcode context +op-jmp+)
+           (let ((post-pos (length (compilation-context-code context))))
+             (emit-u16 context 0) ;; Placeholder for post
+             ;; Else address = start of remaining clauses
+             (let ((else-addr (length (compilation-context-code context))))
+               ;; Compile remaining clauses (else branch)
+               (compile-node context (make-cond-node (rest clauses)))
+               (let ((post (length (compilation-context-code context))))
+                 (setf (aref (compilation-context-code context) else-pos)
+                       (logand (ash else-addr -8) #xff))
+                 (setf (aref (compilation-context-code context) (1+ else-pos))
+                       (logand else-addr #xff))
+                 (setf (aref (compilation-context-code context) post-pos)
+                       (logand (ash post -8) #xff))
+                 (setf (aref (compilation-context-code context) (1+ post-pos))
+                       (logand post #xff)))))))))
     
     ;; Setf
     (:setf
@@ -451,7 +501,8 @@
        (compile-node context value)
        ;; Emit ST to store in environment
        (emit-opcode context +op-st+)
-       (emit-u16 context (get-constant-index context name))))
+       (let ((idx (variable-index context name)))
+         (emit-u16 context (or idx (get-constant-index context name))))))
     
     ;; Progn
     (:progn
