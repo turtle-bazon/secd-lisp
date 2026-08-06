@@ -13,10 +13,35 @@
 (defconstant +uf2-magic-start1+ #x9E5D5157)
 (defconstant +uf2-magic-end+    #x0AB16F30)
 (defconstant +uf2-flag-family+  #x2000)
-(defconstant +rp2040-family-id+ #xE48BFF56)
+(defconstant +uf2-flag-not-main-flash+ #x8000)
+(defconstant +rp2040-family-id+         #xE48BFF56)
+(defconstant +rp2350-arm-s-family-id+   #xE48BFF59)
+(defconstant +rp2350-riscv-family-id+   #xE48BFF5A)
+(defconstant +rp2350-arm-ns-family-id+  #xE48BFF5B)
+(defconstant +samd21-family-id+         #x68ED2B88)
 (defconstant +rp2040-flash-base+ #x10000000)
+(defconstant +samd21-flash-base+ #x00002000)
 (defconstant +rp2040-page-size+ 256)
 (defconstant +uf2-payload-size+ 256)
+
+(defun uf2-family-id (family-name)
+  "Map a metadata output.family string to a UF2 family id.
+Defaults to RP2040 for nil/unknown families."
+  (cond
+    ((string-equal family-name "rp2040")       +rp2040-family-id+)
+    ((string-equal family-name "rp2350-arm-s") +rp2350-arm-s-family-id+)
+    ((string-equal family-name "rp2350-riscv") +rp2350-riscv-family-id+)
+    ((string-equal family-name "rp2350-arm-ns") +rp2350-arm-ns-family-id+)
+    ((string-equal family-name "samd21")       +samd21-family-id+)
+    (t (when family-name
+         (warn "Unknown UF2 family ~S, defaulting to RP2040" family-name))
+       +rp2040-family-id+)))
+
+(defun uf2-flash-base (family-name)
+  "Flash base address for a metadata output.family string (absolute UF2 target base)."
+  (cond
+    ((string-equal family-name "samd21") +samd21-flash-base+)
+    (t +rp2040-flash-base+)))
 
 ;;; Helper: write 32-bit LE
 (defun write-u32-le (buf offset value)
@@ -34,7 +59,7 @@
 
 ;;; Write a single UF2 block. Data is padded to 256 bytes so payload_size is
 ;;; always 256, matching pico-sdk elf2uf2 (RP2040 bootrom expects this).
-(defun write-uf2-block (stream addr data block-no total-blocks)
+(defun write-uf2-block (stream addr data block-no total-blocks family-id)
   "Write a single UF2 block."
   (let* ((buf (make-array 512 :element-type '(unsigned-byte 8) :initial-element 0))
          (padded (make-array +uf2-payload-size+
@@ -54,8 +79,8 @@
     (write-u32-le buf 20 block-no)
     ;; Total blocks
     (write-u32-le buf 24 total-blocks)
-    ;; Family ID (RP2040)
-    (write-u32-le buf 28 +rp2040-family-id+)
+    ;; Family ID
+    (write-u32-le buf 28 family-id)
     ;; Data
     (replace buf padded :start1 32)
     ;; Final magic
@@ -77,10 +102,14 @@
 
 ;;; Convert a UF2 file back to raw flash binary
 (defun uf2-to-bin (uf2-data base-addr)
-  "Extract raw flash content from UF2 blocks as a byte array."
+  "Extract raw flash content from UF2 blocks as a byte array.
+Blocks flagged 'not main flash' (e.g. the RP2350 flash-top sentinel from
+elf2uf2) are skipped; they are not application code."
   (let ((max-end 0))
     (loop for off from 0 below (length uf2-data) by 512
-          do (when (= (read-u32-le uf2-data off) +uf2-magic-start0+)
+          do (when (and (= (read-u32-le uf2-data off) +uf2-magic-start0+)
+                        (zerop (logand (read-u32-le uf2-data (+ off 8))
+                                       +uf2-flag-not-main-flash+)))
                (let* ((addr (read-u32-le uf2-data (+ off 12)))
                       (payload (read-u32-le uf2-data (+ off 16)))
                       (end (- (+ addr payload) base-addr)))
@@ -88,7 +117,9 @@
     (let ((bin (make-array max-end :element-type '(unsigned-byte 8)
                                      :initial-element #xFF)))
       (loop for off from 0 below (length uf2-data) by 512
-            do (when (= (read-u32-le uf2-data off) +uf2-magic-start0+)
+            do (when (and (= (read-u32-le uf2-data off) +uf2-magic-start0+)
+                          (zerop (logand (read-u32-le uf2-data (+ off 8))
+                                         +uf2-flag-not-main-flash+)))
                  (let* ((addr (read-u32-le uf2-data (+ off 12)))
                         (payload (read-u32-le uf2-data (+ off 16)))
                         (dst (- addr base-addr)))
@@ -98,14 +129,16 @@
       bin)))
 
 ;;; Generate fresh UF2 from firmware binary + bytecode
-(defun generate-uf2 (firmware-bin bytecode output-file)
+(defun generate-uf2 (firmware-bin bytecode output-file
+                      &optional (family-id +rp2040-family-id+)
+                                (flash-base +rp2040-flash-base+))
   "Generate a brand new UF2 file from firmware .bin and bytecode.
 Bytecode is placed contiguously after firmware at next page-aligned address."
   (let* ((firmware-size (length firmware-bin))
-         (bytecode-addr (+ +rp2040-flash-base+
+         (bytecode-addr (+ flash-base
                            (* (ceiling firmware-size +rp2040-page-size+)
                               +rp2040-page-size+)))
-         (firmware-chunks (bin-to-uf2-blocks firmware-bin +rp2040-flash-base+))
+         (firmware-chunks (bin-to-uf2-blocks firmware-bin flash-base))
          (bytecode-chunks (bin-to-uf2-blocks bytecode bytecode-addr))
          (total-blocks (+ (length firmware-chunks) (length bytecode-chunks)))
          (block-no 0))
@@ -115,12 +148,14 @@ Bytecode is placed contiguously after firmware at next page-aligned address."
                                          :if-exists :supersede)
       ;; Write firmware blocks
       (dolist (chunk firmware-chunks)
-        (write-uf2-block stream (car chunk) (cdr chunk) block-no total-blocks)
+        (write-uf2-block stream (car chunk) (cdr chunk) block-no total-blocks
+                         family-id)
         (incf block-no))
       
       ;; Write bytecode blocks
       (dolist (chunk bytecode-chunks)
-        (write-uf2-block stream (car chunk) (cdr chunk) block-no total-blocks)
+        (write-uf2-block stream (car chunk) (cdr chunk) block-no total-blocks
+                         family-id)
         (incf block-no)))
     
     (format t "Firmware: ~A bytes, bytecode at 0x~8,'0X~%"
@@ -164,7 +199,9 @@ Bytecode is placed contiguously after firmware at next page-aligned address."
     result))
 
 ;;; Link bytecode with firmware binary to produce UF2
-(defun link-with-firmware (bytecode firmware-bin-path output-path)
+(defun link-with-firmware (bytecode firmware-bin-path output-path
+                           &optional (family-id +rp2040-family-id+)
+                                     (flash-base +rp2040-flash-base+))
   "Link compiled bytecode with firmware .bin to produce UF2.
 Bytecode is appended to firmware binary at next page-aligned address."
   (let* ((firmware-bin (with-open-file (s firmware-bin-path
@@ -186,25 +223,45 @@ Bytecode is appended to firmware binary at next page-aligned address."
     (replace combined bytecode-with-header :start1 padded-size)
     (format t "Firmware: ~A bytes (padded to ~A)~%" (length firmware-bin) padded-size)
     (format t "Bytecode: ~A bytes~%" (length bytecode))
-    (generate-uf2 combined #() output-path)))
+    (generate-uf2 combined #() output-path family-id flash-base)))
 
 ;;; Link command: takes .machine file + compiled bytecode, produces .uf2
+(defun machine-uf2-config (machine-path)
+  "Read output.family from the .machine metadata.json.
+Returns (values family-id flash-base)."
+  (zip:with-zipfile (zip machine-path)
+    (let ((entry (zip:get-zipfile-entry "metadata.json" zip)))
+      (when entry
+        (let* ((metadata-data (zip:zipfile-entry-contents entry))
+               (metadata (yason:parse
+                          (map 'string #'code-char metadata-data)))
+               (output (gethash "output" metadata)))
+          (when output
+            (let ((family-name (gethash "family" output)))
+              (return-from machine-uf2-config
+                (values (uf2-family-id family-name)
+                        (uf2-flash-base family-name)))))))))
+  (values +rp2040-family-id+ +rp2040-flash-base+))
+
 (defun link-machine (machine-path bytecode output-path)
   "Link bytecode with .machine file to produce .uf2.
 The .machine file contains firmware.uf2 + metadata.json. The firmware
 blocks are extracted back to raw binary, then re-linked with the bytecode."
-  (let* ((temp-dir (merge-pathnames #p".secd-lisp/tmp/" (user-homedir-pathname)))
-         (firmware-bin-path (merge-pathnames "firmware.bin" temp-dir)))
-    (ensure-directories-exist temp-dir)
-    ;; Extract firmware.uf2 from .machine and convert to raw binary
-    (zip:with-zipfile (zip machine-path)
-      (let ((entry (zip:get-zipfile-entry "firmware.uf2" zip)))
-        (unless entry (error "No firmware.uf2 in ~A" machine-path))
-        (let* ((uf2-data (zip:zipfile-entry-contents entry))
-               (firmware-bin (uf2-to-bin uf2-data +rp2040-flash-base+)))
-          (with-open-file (stream firmware-bin-path :direction :output
-                                                    :element-type '(unsigned-byte 8)
-                                                    :if-exists :supersede)
-            (write-sequence firmware-bin stream)))))
-    ;; Link raw firmware with bytecode
-    (link-with-firmware bytecode firmware-bin-path output-path)))
+  (multiple-value-bind (family-id flash-base)
+      (machine-uf2-config machine-path)
+    (let* ((temp-dir (merge-pathnames #p".secd-lisp/tmp/" (user-homedir-pathname)))
+           (firmware-bin-path (merge-pathnames "firmware.bin" temp-dir)))
+      (ensure-directories-exist temp-dir)
+      ;; Extract firmware.uf2 from .machine and convert to raw binary
+      (zip:with-zipfile (zip machine-path)
+        (let ((entry (zip:get-zipfile-entry "firmware.uf2" zip)))
+          (unless entry (error "No firmware.uf2 in ~A" machine-path))
+          (let* ((uf2-data (zip:zipfile-entry-contents entry))
+                 (firmware-bin (uf2-to-bin uf2-data flash-base)))
+            (with-open-file (stream firmware-bin-path :direction :output
+                                                      :element-type '(unsigned-byte 8)
+                                                      :if-exists :supersede)
+              (write-sequence firmware-bin stream)))))
+      ;; Link raw firmware with bytecode
+      (link-with-firmware bytecode firmware-bin-path output-path family-id
+                          flash-base))))
