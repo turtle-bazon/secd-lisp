@@ -3,7 +3,7 @@
 ;;;; Copyright (C) 2026
 ;;;; License: GPL3
 ;;;;
-;;;; Demonstrates conditional expressions.
+;;;; Demonstrates conditional expressions. Entry point is (defun main ()).
 
 ;; Simple if
 (defun abs (x)
@@ -11,21 +11,20 @@
       (neg x)
       x))
 
-(print (abs -5))
-(print (abs 5))
-
 ;; When
 (defun is-positive (x)
   (when (> x 0)
     t))
-
-(print (is-positive 5))
-(print (is-positive -5))
 
 ;; Unless
 (defun is-non-positive (x)
   (unless (> x 0)
     t))
 
-(print (is-non-positive -5))
-(print (is-non-positive 5))
+(defun main ()
+  (print (abs -5))
+  (print (abs 5))
+  (print (is-positive 5))
+  (print (is-positive -5))
+  (print (is-non-positive -5))
+  (print (is-non-positive 5)))

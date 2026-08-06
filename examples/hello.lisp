@@ -3,13 +3,10 @@
 ;;;; Copyright (C) 2026
 ;;;; License: GPL3
 ;;;;
-;;;; Simple hello world program.
+;;;; Simple hello world program. The entry point is (defun main ()).
 
 ;; Print a number
-(print 42)
-
-;; Print result of arithmetic
-(print (+ 1 2))
-
-;; Print boolean
-(print t)
+(defun main ()
+  (print 42)
+  ;; Print result of arithmetic
+  (print (+ 1 2)))

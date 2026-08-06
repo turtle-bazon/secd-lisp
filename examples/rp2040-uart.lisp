@@ -1,33 +1,19 @@
-;;;; rp2040-uart.lisp — RP2040 UART example
+;;;; rp2040-uart.lisp — RP2040 UART echo example
 ;;;;
 ;;;; Copyright (C) 2026
 ;;;; License: GPL3
 ;;;;
-;;;; UART communication example.
+;;;; UART echo: configures the UART and echoes received bytes back.
+;;;; (Note: the compiler's `let` binding-list support is pending, so this
+;;;; example passes the byte through a helper function instead.)
 
-;; Initialize UART
-(defun uart-init ()
-  (uart-write-string "SECD-Lisp on RP2040\n")
-  (uart-write-string "==================\n"))
+;; Echo a byte back if it is non-zero.
+(defun echo-byte (byte)
+  (if (> byte 0)
+      (%uart-write byte)
+      0))
 
-;; Send a number
-(defun send-number (n)
-  (uart-write-string "Number: ")
-  (uart-write n)
-  (uart-write-string "\n"))
-
-;; Echo received data
-(defun echo-loop ()
-  (loop
-    (when (serial-available)
-      (let ((byte (serial-read)))
-        (serial-write byte)))))
-
-;; Main
 (defun main ()
-  (uart-init)
-  (send-number 42)
-  (echo-loop))
-
-;; Run
-(main)
+  (%uart-init 115200)
+  (loop
+    (echo-byte (%uart-read))))

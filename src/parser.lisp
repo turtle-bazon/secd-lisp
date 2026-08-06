@@ -156,7 +156,7 @@
 ;;; Special form names (compared by symbol-name string)
 (defparameter *special-form-names*
   '("DEFUN" "LAMBDA" "IF" "WHEN" "UNLESS" "COND" "LET" "LET*"
-    "PROGN" "SETF" "SET!" "LOOP" "DEFVAR" "QUOTE"))
+    "PROGN" "SETF" "SET!" "LOOP" "DEFVAR" "DEFCONSTANT" "QUOTE"))
 
 (defun special-form-name-p (name)
   "Check if a symbol name is a special form."
@@ -250,6 +250,9 @@
       ((string= sname "DEFVAR")
        (make-defvar-node (ast-node-value (first args)) (second args)
                          :line line :column col))
+      ((string= sname "DEFCONSTANT")
+       (make-defconstant-node (ast-node-value (first args)) (second args)
+                              :line line :column col))
       ((string= sname "QUOTE")
        (make-quote-node (first args) :line line :column col))
       (t

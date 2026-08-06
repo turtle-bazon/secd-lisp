@@ -11,5 +11,6 @@
       n
       (+ (fibonacci (- n 1)) (fibonacci (- n 2)))))
 
-;; Print fibonacci of 10
-(print (fibonacci 10))
+;; Entry point: print fibonacci of 10
+(defun main ()
+  (print (fibonacci 10)))

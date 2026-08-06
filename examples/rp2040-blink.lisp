@@ -7,24 +7,24 @@
 
 ;; Initialize LED pin as output
 (defun led-init ()
-  (gpio-init 25 :output))
+  (%gpio-init 25 :output))
 
 ;; Turn LED on
 (defun led-on ()
-  (gpio-write 25 1))
+  (%gpio-write 25 1))
 
 ;; Turn LED off
 (defun led-off ()
-  (gpio-write 25 0))
+  (%gpio-write 25 0))
 
 ;; Blink LED (recursive countdown; no dotimes/loop-exit in the compiler yet)
 (defun blink (times delay)
   (if (> times 0)
       (progn
         (led-on)
-        (sleep delay)
+        (%sleep delay)
         (led-off)
-        (sleep delay)
+        (%sleep delay)
         (blink (- times 1) delay))
       0))
 
@@ -32,6 +32,3 @@
 (defun main ()
   (led-init)
   (blink 10 500))
-
-;; Run
-(main)

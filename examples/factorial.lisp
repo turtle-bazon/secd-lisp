@@ -11,5 +11,6 @@
       1
       (* n (factorial (- n 1)))))
 
-;; Print factorial of 5
-(print (factorial 5))
+;; Entry point: print factorial of 5
+(defun main ()
+  (print (factorial 5)))

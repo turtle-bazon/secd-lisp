@@ -105,6 +105,12 @@
                  :children (list value)
                  :line line :column column))
 
+(defun make-defconstant-node (name value &key (line 0) (column 0))
+  "Create a constant definition node."
+  (make-ast-node :type :defconstant :value name
+                 :children (list value)
+                 :line line :column column))
+
 (defun make-application-node (operator operands &key (line 0) (column 0))
   "Create a function application node."
   (make-ast-node :type :application :value operator

@@ -19,7 +19,11 @@
   (lambdas nil :type list)  ; For nested lambda compilation
   (functions (make-hash-table :test 'eq) :type hash-table)  ; name -> function body address
   (primitives (make-hash-table :test 'eq) :type hash-table)  ; name -> primitive id
-  (scopes nil :type list))  ; lexical scopes: list of frames; each frame is a list of bound names (innermost frame first)
+  (scopes nil :type list)  ; lexical scopes: list of frames; each frame is a list of bound names (innermost frame first)
+  (current-package "SECD" :type string)  ; package symbols resolve in
+  (packages (make-hash-table :test 'equal) :type hash-table)  ; package name -> (required refers exports)
+  (top-level-constants (make-hash-table :test 'equal) :type hash-table)  ; canon name -> literal value
+  (entry "SECD:MAIN" :type string))  ; entry point function, "PKG:FN", chosen at build time
 
 ;;; Bytecode instructions (matching secd-machine bytecode.h)
 (defconstant +op-stop+ #x00)
@@ -113,18 +117,304 @@
       (incf running (length frame)))
     nil))
 
+;;; Packages
+;;;
+;;; The default package is SECD and (defun main ()) in it is the program's
+;;; entry point. Names resolve in the current package: a bare name becomes
+;;; CURRENT:name. A fully qualified reference "pkg:name" is only usable once
+;;; the package has been loaded into the current package (see below).
+;;; Built-in opcodes, primitives, core functions, keywords and t/nil are
+;;; global (reachable from any package).
+;;;
+;;; Libraries are pulled in with:
+;;;     (require :ws2812)                        ; ws2812:name usable
+;;;     (require :ws2812 :refer (rgb-off))       ; rgb-off -> ws2812:rgb-off
+;;;     (require :ws2812 :refer ((rgb-off off))) ; off -> ws2812:rgb-off
+;;;     (load "ws2812")                          ; load without refer
+;;; The same options can be written as (:require :ws2812 :refer ...) inside a
+;;; defpackage. There is no :use.
+
+;;; Operator value of an application node, if its operator is a symbol or a
+;;; keyword (the parser represents both as :symbol nodes).
+(defun application-operator (node)
+  "Return NODE's operator value when NODE is an application, else NIL."
+  (when (ast-application-p node)
+    (let ((op (ast-node-value node)))
+      (when (ast-symbol-p op) (ast-node-value op)))))
+
+;;; Check if a node is a package directive (in-package / defpackage)
+(defun package-directive-name (node)
+  "Return the directive name (e.g. \"IN-PACKAGE\") if NODE is one, else NIL."
+  (let ((op (application-operator node)))
+    (when (and op (symbolp op)
+               (member (symbol-name op) '("IN-PACKAGE" "DEFPACKAGE")
+                       :test #'string-equal))
+      (symbol-name op))))
+
+(defun package-directive-p (node)
+  "Check if NODE is an in-package or defpackage directive."
+  (not (null (package-directive-name node))))
+
+;;; Resolve a symbol name to its package-qualified form
+(defun canonical-sym (context name)
+  "Resolve NAME to its fully qualified symbol in the current package."
+  (let ((sname (symbol-name name)))
+    (cond
+      ;; Already qualified (pkg:name / pkg::name), a keyword, t/nil, or a
+      ;; symbol from another package (CL/alexandria exports leak into the
+      ;; SECD-LISP package via :use; they are treated as global)
+      ((or (find #\: sname)
+           (keywordp name)
+           (not (eq (symbol-package name) (find-package "SECD-LISP")))
+           (or (string= sname "T") (string= sname "NIL")))
+       name)
+      (t
+       (intern (concatenate 'string (compilation-context-current-package context)
+                            ":" sname)
+               "SECD-LISP")))))
+
+;;; Library spec for (require :lib ...) / (load "path ..."): the value of the
+;;; first child, lowercased so it works as a file path (package names keep
+;;; their case; paths do not).
+(defun library-spec-path (node)
+  "Return the search-path-relative library path named by NODE's first child."
+  (let* ((arg (first (ast-node-children node)))
+         (value (and arg (ast-node-value arg))))
+    (string-downcase (if (symbolp value) (symbol-name value)
+                         (princ-to-string value)))))
+
+;;; Library path for a (load "path") directive
+(defun load-path (node)
+  "Return the library path of a (load ...) node, else NIL."
+  (when (and (ast-application-p node)
+             (let ((op (application-operator node)))
+               (and op (symbolp op)
+                    (string-equal (symbol-name op) "LOAD"))))
+    (library-spec-path node)))
+
+;;; True if NODE is a (require ...) application
+(defun require-node-p (node)
+  "Return non-NIL if NODE is a (require ...) directive."
+  (and (ast-application-p node)
+       (let ((op (application-operator node)))
+         (and op (symbolp op)
+              (string-equal (symbol-name op) "REQUIRE")))))
+
+;;; One :refer spec into (foreign . local) symbol-name strings.
+;;;   (rgb-off)        -> ("RGB-OFF" . "RGB-OFF")
+;;;   ((rgb-off off))  -> ("RGB-OFF" . "OFF")
+(defun parse-refer-spec (spec)
+  "Parse a single :refer spec node into (FOREIGN . LOCAL) name strings."
+  (let ((op (ast-node-value spec)))
+    (if (ast-symbol-p op)
+        (let ((name (symbol-name (ast-node-value op))))
+          (cons name name))
+        (let* ((foreign (symbol-name (ast-node-value (ast-node-value op))))
+               (args (ast-node-children op))
+               (local (if args
+                          (symbol-name (ast-node-value (first args)))
+                          foreign)))
+          (cons foreign local)))))
+
+;;; Refer rules of a require lib-spec: from its ":refer <spec>" siblings.
+;;;   :refer :all          -> (:all) (expanded to the library's exports)
+;;;   :refer (rgb-off)     -> (("RGB-OFF" . "RGB-OFF"))
+;;;   :refer ((rgb-off off)) -> (("RGB-OFF" . "OFF"))
+(defun parse-refer-rules (node)
+  "Return a list of (FOREIGN . LOCAL) rules from NODE's :refer options,
+or (:all) when the refer option is :all."
+  (loop for rest on (ast-node-children node)
+        for child = (first rest)
+        when (and (ast-symbol-p child)
+                  (keywordp (ast-node-value child))
+                  (string-equal (symbol-name (ast-node-value child)) "REFER"))
+          append (let ((spec (second rest)))
+                   (cond
+                     ((null spec) nil)
+                     ((and (ast-symbol-p spec)
+                           (keywordp (ast-node-value spec))
+                           (string-equal (symbol-name (ast-node-value spec)) "ALL"))
+                      (list :all))
+                     (t (list (parse-refer-spec spec)))))))
+
+;;; Parse one library spec of a require node into (PATH-STRING . RULES).
+;;;   :ws2812                -> ("ws2812" . NIL)   ; require, no refer
+;;;   (:ws2812 :refer :all)  -> ("ws2812" . (:all))
+(defun parse-lib-spec (spec)
+  "Parse one library spec into (PATH-STRING . RULES)."
+  (cons (string-downcase (symbol-name (if (ast-symbol-p spec)
+                                          (ast-node-value spec)
+                                          (application-operator spec))))
+        (if (ast-symbol-p spec)
+            nil
+            (parse-refer-rules spec))))
+
+;;; Library specs of a require node
+(defun parse-lib-specs (node)
+  "Return the library specs of a require node: a list of (PATH . RULES)."
+  (mapcar #'parse-lib-spec (ast-node-children node)))
+
+;;; Package descriptors are (REQUIRED REFERS EXPORTS):
+;;;   REQUIRED - list of package names loaded into this package
+;;;   REFERS   - alist of (LOCAL-NAME . QUALIFIED-SYMBOL) imports/aliases
+;;;   EXPORTS  - informational only
+(defun make-package-descriptor ()
+  "Create an empty package descriptor."
+  (list nil nil nil))
+
+(defun package-descriptor (context name)
+  "Return (REQUIRED REFERS EXPORTS) for package NAME, or NIL."
+  (gethash name (compilation-context-packages context)))
+
+(defun ensure-package (context name)
+  "Make sure package NAME has a descriptor."
+  (unless (package-descriptor context name)
+    (setf (gethash name (compilation-context-packages context))
+          (make-package-descriptor))))
+
+(defun package-required (context name)
+  "Return the packages loaded into package NAME."
+  (first (package-descriptor context name)))
+
+(defun package-refers (context name)
+  "Return the (LOCAL . QUALIFIED) alist of package NAME."
+  (second (package-descriptor context name)))
+
+;;; Is PKG usable (loaded/required, declared in this program, or the current
+;;; package itself) from the current package?
+(defun package-accessible-p (context pkg)
+  "Return non-NIL if PKG can be referenced from the current package."
+  (let ((cur (compilation-context-current-package context)))
+    (or (string-equal pkg cur)
+        (member pkg (package-required context cur) :test #'string=)
+        ;; packages declared in this program (defpackage/in-package) are
+        ;; reachable without require; only libraries need require/load
+        (not (null (package-descriptor context pkg))))))
+
+;;; Resolve a function name to its canonical defined symbol
+(defun resolve-function-name (context name)
+  "Return the canonical symbol that NAME resolves to as a function call.
+Resolves local definitions, then refers/aliases, then global names."
+  (let ((s (symbol-name name)))
+    (cond
+      ;; Fully qualified (pkg:name): only usable once the package is loaded
+      ((find #\: s)
+       (let ((pkg (subseq s 0 (position #\: s))))
+         (unless (package-accessible-p context pkg)
+           (error "Package ~A not loaded; add (require :~A) before referencing ~A"
+                  pkg (string-downcase pkg) s))
+         name))
+      ;; t/nil, keywords, and symbols from other packages (CL/alexandria
+      ;; names leak into SECD-LISP via :use) are global
+      ((or (string-equal s "T") (string-equal s "NIL")
+           (keywordp name)
+           (not (eq (symbol-package name) (find-package "SECD-LISP"))))
+       name)
+      (t
+       (let ((pkg (compilation-context-current-package context)))
+         ;; 1. local definition
+         (let ((canon (intern (concatenate 'string pkg ":" s) "SECD-LISP")))
+           (when (gethash canon (compilation-context-functions context))
+             (return-from resolve-function-name canon)))
+         ;; 2. refer / alias
+         (let ((ref (assoc s (package-refers context pkg) :test #'string-equal)))
+           (when ref
+             (return-from resolve-function-name (cdr ref))))
+         ;; 3. global names (primitives and core functions)
+         name)))))
+
+;;; Record a loaded library in package PKG and apply refer rules
+(defun apply-require (context pkg lib-pkg rules)
+  "Record LIB-PKG as required in package PKG and apply refer RULES."
+  (ensure-package context pkg)
+  (pushnew lib-pkg (first (package-descriptor context pkg)) :test #'string=)
+  (labels ((add-rule (foreign local)
+             (let ((qualified (intern (concatenate 'string lib-pkg ":" foreign)
+                                      "SECD-LISP")))
+               (push (cons local qualified)
+                     (second (package-descriptor context pkg))))))
+    (dolist (rule rules)
+      (if (eq rule :all)
+          ;; Import every symbol the library exports
+          (dolist (export (third (package-descriptor context lib-pkg)))
+            (add-rule export export))
+          (add-rule (car rule) (cdr rule))))))
+
+;;; Process (:require ...) and (:export ...) options of a package directive
+(defun apply-defpackage-options (context pname options visited)
+  "Process the require/export options of a defpackage/in-package."
+  (dolist (option options)
+    (when (ast-application-p option)
+      (let ((op (ast-node-value option)))
+        (when (ast-symbol-p op)
+          (let ((oname (symbol-name (ast-node-value op))))
+            (cond
+              ((string-equal oname "REQUIRE")
+               (dolist (spec (parse-lib-specs option))
+                 (let* ((path (car spec))
+                        (rules (cdr spec))
+                        (lib-pkg (load-library-file
+                                  context
+                                  (resolve-library-file path) visited)))
+                   (apply-require context pname lib-pkg rules))))
+              ((string-equal oname "EXPORT")
+               ;; Record the exported names so (:refer :all) can import them
+               (setf (third (package-descriptor context pname))
+                     (union (mapcar (lambda (child)
+                                      (symbol-name (ast-node-value child)))
+                                    (ast-node-children option))
+                            (third (package-descriptor context pname))
+                            :test #'string-equal)))
+              (t nil))))))))
+
+;;; Handle an in-package / defpackage top-level directive
+(defun compile-package-directive (context node &optional visited)
+  "Compile a package directive (in-package / defpackage). Emits no code."
+  (let* ((dname (package-directive-name node))
+         (args (ast-node-children node)))
+    (cond
+      ((string-equal dname "IN-PACKAGE")
+       (let ((pname (string-upcase (ast-node-value (first args)))))
+         (ensure-package context pname)
+         (apply-defpackage-options context pname (rest args) visited)
+         (setf (compilation-context-current-package context) pname)))
+      ((string-equal dname "DEFPACKAGE")
+       (let ((pname (string-upcase (ast-node-value (first args)))))
+         (ensure-package context pname)
+         (apply-defpackage-options context pname (rest args) visited)
+         ;; One file = one package: defpackage alone establishes the current
+         ;; package, so an explicit (in-package ...) is not needed.
+         (setf (compilation-context-current-package context) pname)))
+      (t nil))))
+
+
 ;;; Compile a variable reference
 (defun compile-variable (context name)
   "Compile a variable reference."
-  (let ((idx (variable-index context name)))
-    (if idx
-        (progn
-          (emit-opcode context +op-ld+)
-          (emit-u16 context idx))
-        ;; Unresolved symbol: keep a placeholder constant reference.
-        (progn
-          (emit-opcode context +op-ldc+)
-          (emit-u16 context (get-constant-index context name))))))
+  (let ((s (symbol-name name)))
+    (when (find #\: s)
+      (let ((pkg (subseq s 0 (position #\: s))))
+        (unless (package-accessible-p context pkg)
+          (error "Package ~A not loaded; add (require :~A) before referencing ~A"
+                 pkg (string-downcase pkg) s))))
+    (let* ((canon (canonical-sym context name))
+           (idx (variable-index context canon)))
+      (if idx
+          (progn
+            (emit-opcode context +op-ld+)
+            (emit-u16 context idx))
+          ;; Module-level constant: splice the literal value
+          (let ((const (gethash canon (compilation-context-top-level-constants context))))
+            (if const
+                (compile-literal context const)
+                ;; Unresolved symbol: resolve refers/aliases, else keep a
+                ;; placeholder constant reference.
+                (let* ((pkg (compilation-context-current-package context))
+                       (ref (unless (find #\: s)
+                              (assoc s (package-refers context pkg) :test #'string-equal))))
+                  (emit-opcode context +op-ldc+)
+                  (emit-u16 context (get-constant-index context
+                                                        (if ref (cdr ref) canon))))))))))
 
 ;;; Symbols compiled directly to VM opcodes
 (defun builtin-opcode-p (name)
@@ -141,8 +431,9 @@
   "Compile the function/primitive target of a call."
   (if (ast-symbol-p operator)
       (let* ((name (ast-node-value operator))
-             (fn-addr (gethash name (compilation-context-functions context)))
-             (prim-id (gethash name (compilation-context-primitives context))))
+             (resolved (resolve-function-name context name))
+             (fn-addr (gethash resolved (compilation-context-functions context)))
+             (prim-id (gethash resolved (compilation-context-primitives context))))
         (cond
           (fn-addr
            (values :func fn-addr))
@@ -171,40 +462,175 @@
 (defun load-target-primitives (context target-name)
   "Load target primitive ids into the compilation context."
   (let ((target (load-target target-name)))
+    ;; Core primitives are identical on every target (registered first by the
+    ;; firmware, ids 0-14). Target metadata may still override/add entries.
+    (let ((core '(("car" . 0) ("cdr" . 1) ("cons" . 2) ("list" . 3)
+                  ("+" . 4) ("-" . 5) ("*" . 6) ("/" . 7) ("%" . 8)
+                  ("=" . 9) ("<" . 10) (">" . 11)
+                  ("null?" . 12) ("pair?" . 13) ("atom?" . 14))))
+      (dolist (core-def core)
+        (setf (gethash (intern (string-upcase (car core-def)) "SECD-LISP")
+                       (compilation-context-primitives context))
+              (cdr core-def))))
     (loop for prim-name being the hash-keys of (target-primitives target)
             using (hash-value prim-def)
           do (setf (gethash (intern (string-upcase prim-name) "SECD-LISP")
                             (compilation-context-primitives context))
                    (gethash "id" prim-def)))))
 
+;;; Libraries
+;;;
+;;; Library files live in *library-search-paths* (default: library/ under the
+;;; system, plus any directory added with --lib or the SECD_LIB environment
+;;; variable). (require :name) and (load "name") both parse and process a
+;;; library file's top-level forms (its defpackage/in-package/require/load
+;;; and defuns) at compile time; require additionally makes the library's
+;;; symbols referable from the current package (qualified, or via :refer).
+
+;;; Search paths for library files
+(defvar *library-search-paths*
+  (list (asdf:system-relative-pathname :secd-lisp "library/"))
+  "Directories searched for library files.")
+
+;;; Add a directory to the library search path
+(defun add-library-search-path (path)
+  "Add PATH to the library search path."
+  (push (uiop:parse-native-namestring path) *library-search-paths*))
+
+;;; Resolve a library file by name
+(defun resolve-library-file (name)
+  "Find the .lisp file for library NAME in the search paths."
+  (let ((filename (format nil "~A.lisp" name)))
+    (or (loop for path in *library-search-paths*
+              for file = (merge-pathnames filename path)
+              when (probe-file file)
+                return file)
+        (error "Library file not found: ~A (searched: ~{~A~^, ~})"
+               name *library-search-paths*))))
+
+;;; Package a library file declares, if any
+(defun library-package-name (program)
+  "Return the package name declared by the library's first directive."
+  (let ((forms (ast-node-value program)))
+    (or (loop for form in forms
+              when (and (package-directive-p form)
+                        (string-equal (package-directive-name form) "DEFPACKAGE"))
+                return (string-upcase (ast-node-value (first (ast-node-children form)))))
+        (loop for form in forms
+              when (and (package-directive-p form)
+                        (string-equal (package-directive-name form) "IN-PACKAGE"))
+                return (string-upcase (ast-node-value (first (ast-node-children form))))))))
+
+;;; Load a library file, processing its forms with its own package in scope
+(defun load-library-file (context path visited)
+  "Parse and process the top-level forms of library file PATH."
+  (when (member path visited :test #'equal)
+    (error "Circular require/load: ~A" path))
+  (let* ((lib-ast (parse (tokenize (uiop:read-file-string path))))
+         (lib-pkg (library-package-name lib-ast))
+         (saved (compilation-context-current-package context)))
+    (process-top-level-forms context (ast-node-value lib-ast) (cons path visited))
+    (setf (compilation-context-current-package context) saved)
+    (or lib-pkg (string-upcase (pathname-name path)))))
+
+;;; Compile a top-level (require libspec*) directive
+(defun compile-require-directive (context node visited)
+  "Process a top-level (require ...) directive with one or more lib specs."
+  (dolist (spec (parse-lib-specs node))
+    (let* ((path (car spec))
+           (rules (cdr spec))
+           (lib-pkg (load-library-file context
+                                      (resolve-library-file path) visited)))
+      (apply-require context (compilation-context-current-package context)
+                     lib-pkg rules))))
+
+;;; Compile a top-level (load "path") directive
+(defun compile-load-directive (context node visited)
+  "Process a (load \"path\") directive (a require without refer)."
+  (let* ((path (resolve-library-file (load-path node)))
+         (lib-pkg (load-library-file context path visited)))
+    (apply-require context (compilation-context-current-package context)
+                   lib-pkg nil)))
+
+;;; Record a module-level (defconstant NAME <literal>) as a constant;
+;;; references to NAME are spliced in as the literal value. Emits no runtime
+;;; code. (defvar, by contrast, declares a variable and is not a constant.)
+(defun compile-defconstant (context node)
+  "Record a module-level (defconstant NAME <literal>) as a constant."
+  (let* ((canon (canonical-sym context (ast-node-value node)))
+         (value-node (first (ast-node-children node)))
+         (value (cond
+                  ((ast-integer-p value-node) (ast-node-value value-node))
+                  ((eq (ast-node-type value-node) :boolean)
+                   (ast-node-value value-node))
+                  ((eq (ast-node-type value-node) :nil) nil)
+                  ((ast-symbol-p value-node)
+                   (let ((v (ast-node-value value-node)))
+                     (cond ((eq v 't) t)
+                           ((eq v 'nil) nil)
+                           (t (error "defconstant value must be a constant literal, got ~S"
+                                     v)))))
+                  (t (error "defconstant value must be a constant literal, got ~S"
+                            (ast-node-type value-node))))))
+    (setf (gethash canon (compilation-context-top-level-constants context)) value)))
+
+;;; Process top-level forms in source order: package directives, require/load
+;;; and defuns. Only these are allowed at the top level; the program entry
+;;; point is always (defun main ()) in the SECD package.
+(defun process-top-level-forms (context forms visited)
+  "Process the top-level FORMS of a program or library file."
+  (dolist (form forms)
+    (cond
+      ((package-directive-p form)
+       (compile-package-directive context form visited))
+      ((require-node-p form)
+       (compile-require-directive context form visited))
+      ((load-path form)
+       (compile-load-directive context form visited))
+      ((eq (ast-node-type form) :defun)
+       (compile-node context form))
+      ((eq (ast-node-type form) :defconstant)
+       (compile-defconstant context form))
+      (t
+       (error "Unexpected top-level form (~A); only defun, defpackage, in-package, require, load and defconstant are allowed"
+              (ast-node-type form))))))
+
 ;;; Compile an AST node
 (defun compile-node (context node)
   "Compile an AST node to bytecode."
-  (case (ast-node-type node)
+  (if (package-directive-p node)
+      (compile-package-directive context node)
+      (case (ast-node-type node)
     ;; Program (top-level)
-    ;; Layout: [JMP <driver>] [defun blobs (skipped at runtime)] [driver]
-    ;; Defun bodies are compiled first so the driver can forward-reference
-    ;; them; a leading JMP skips the defun region at startup.
+    ;; Layout: [JMP <entry>] [defun blobs (skipped at runtime)] [entry]
+    ;; Defun blobs are compiled first so the entry can forward-reference them;
+    ;; a leading JMP skips the defun region at startup. The entry is always
+    ;; a call to (secd:main).
     (:program
      (let ((children (ast-node-value node))
-           (driver-start 0))
+           (entry-start 0))
        ;; Emit JMP placeholder (patched below to skip the defun region)
        (emit-opcode context +op-jmp+)
        (emit-u16 context 0)
-       ;; Pass 1: compile defun blobs (LDF <body> / body / RTN)
-       (dolist (child children)
-         (when (eq (ast-node-type child) :defun)
-           (compile-node context child)))
-       ;; Record where the driver code begins
-       (setf driver-start (length (compilation-context-code context)))
-       ;; Pass 2: compile remaining top-level forms (the driver)
-       (dolist (child children)
-         (unless (eq (ast-node-type child) :defun)
-           (compile-node context child)))
-       ;; Patch the JMP target to skip the defun region
-       (let ((code (compilation-context-code context)))
-         (setf (aref code 1) (logand (ash driver-start -8) #xff))
-         (setf (aref code 2) (logand driver-start #xff)))))
+       ;; Compile all top-level forms in order (defuns, packages, require/load)
+       (process-top-level-forms context children nil)
+       ;; Record where the entry code begins
+       (setf entry-start (length (compilation-context-code context)))
+       ;; Entry point: the function chosen at build time (:entry "PKG:FN",
+       ;; default SECD:MAIN). A program that declares its own package sets
+       ;; the entry to its package's main, e.g. :entry "rgb-blink:main".
+        (let ((main-sym (intern (string-upcase (compilation-context-entry context))
+                                "SECD-LISP")))
+         (unless (gethash main-sym (compilation-context-functions context))
+           (error "No (defun ...) for entry point ~A defined"
+                  (compilation-context-entry context)))
+         (compile-node context
+                       (make-application-node
+                        (make-symbol-node main-sym) nil)))
+        ;; Patch the JMP target to skip the defun region
+        (let ((code (compilation-context-code context)))
+          (setf (aref code 1) (logand (ash entry-start -8) #xff))
+          (setf (aref code 2) (logand entry-start #xff)))))
     
     ;; Integer literal
     (:integer
@@ -285,7 +711,8 @@
     
     ;; Lambda
     (:lambda
-     (let ((params (ast-node-value node))
+     (let ((params (mapcar (lambda (p) (canonical-sym context p))
+                           (ast-node-value node)))
            (body (ast-node-children node)))
        ;; Emit LDF with placeholder address
        (emit-opcode context +op-ldf+)
@@ -319,7 +746,7 @@
     ;; Defun
     (:defun
      (let* ((name-and-params (ast-node-value node))
-            (name (car name-and-params))
+            (name (canonical-sym context (car name-and-params)))
             (params (second name-and-params))
             (body (ast-node-children node))
             ;; LDF opcode + 2 operand bytes precede the function body
@@ -528,7 +955,7 @@
     
     ;; Default
     (t
-     (error "Unknown AST node type: ~A" (ast-node-type node)))))
+     (error "Unknown AST node type: ~A" (ast-node-type node))))))
 
 ;;; Helper to create cond node
 (defun make-cond-node (clauses)
@@ -536,28 +963,30 @@
   (make-ast-node :type :cond :value nil :children clauses))
 
 ;;; Compile AST to bytecode
-(defun compile-to-bytecode (ast &optional (target :rp2040))
+(defun compile-to-bytecode (ast &optional (target :rp2040)
+                            &key (entry "SECD:MAIN"))
   "Compile an AST to SECD bytecode."
   (let ((context (make-compilation-context)))
     (when target
       (load-target-primitives context target))
+    (setf (compilation-context-entry context) entry)
     (compile-node context ast)
     (emit-opcode context +op-stop+)
     (compilation-context-code context)))
 
 ;;; Compile a file
-(defun secd-compile-file (filename &key (target :rp2040))
+(defun secd-compile-file (filename &key (target :rp2040) (entry "SECD:MAIN"))
   "Compile a secd-lisp file to SECD bytecode."
   (let* ((source (uiop:read-file-string filename))
          (tokens (tokenize source))
          (ast (parse tokens))
-         (bytecode (compile-to-bytecode ast target)))
+         (bytecode (compile-to-bytecode ast target :entry entry)))
     bytecode))
 
 ;;; Compile a string
-(defun compile-string (string &key (target :rp2040))
+(defun compile-string (string &key (target :rp2040) (entry "SECD:MAIN"))
   "Compile a secd-lisp string to SECD bytecode."
   (let* ((tokens (tokenize string))
          (ast (parse tokens))
-         (bytecode (compile-to-bytecode ast target)))
+         (bytecode (compile-to-bytecode ast target :entry entry)))
     bytecode))

@@ -110,6 +110,10 @@
         (start-line (lexer-line lexer))
         (start-col (lexer-column lexer))
         (has-dot nil))
+    ;; Consume an optional leading minus so negative literals work
+    (when (and (eql (lexer-peek lexer) #\-)
+               (digit-char-p (lexer-peek lexer 1)))
+      (lexer-advance lexer))
     ;; Read digits and optional dot
     (loop while (< (lexer-position lexer) (length (lexer-input lexer)))
           for ch = (lexer-peek lexer)

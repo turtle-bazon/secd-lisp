@@ -11,21 +11,18 @@
 
 ;; Initialize hardware
 (defun init ()
-  (gpio-init +led-pin+ :output)
-  (gpio-init +button-pin+ :input))
+  (%gpio-init +led-pin+ :output)
+  (%gpio-init +button-pin+ :input))
 
 ;; Read button state
 (defun button-pressed ()
-  (= (gpio-read +button-pin+) 1))
+  (= (%gpio-read +button-pin+) 1))
 
 ;; Main loop
 (defun main ()
   (init)
   (loop
     (if (button-pressed)
-        (gpio-write +led-pin+ 1)
-        (gpio-write +led-pin+ 0))
-    (sleep 10)))
-
-;; Run
-(main)
+        (%gpio-write +led-pin+ 1)
+        (%gpio-write +led-pin+ 0))
+    (%sleep 10)))
