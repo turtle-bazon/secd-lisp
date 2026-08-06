@@ -31,7 +31,7 @@
   (progn
     (rgb-show pin (list rgb))
     (%sleep on-ms)
-    (rgb-off pin)
+    (rgb-off pin 1)
     (%sleep off-ms)))
 
 (defun main ()

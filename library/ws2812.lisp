@@ -53,6 +53,14 @@
     (%gpio-write pin 0)
     (%sleep 1)))
 
-;; Turn all pixels off by transmitting a black (0 0 0) frame.
-(defun rgb-off (pin)
-  (rgb-show pin (list (list 0 0 0))))
+;; Build a strip of COUNT identical black pixels.
+(defun black-strip (count)
+  (if (= count 0)
+      nil
+      (cons (list 0 0 0) (black-strip (- count 1)))))
+
+;; Turn off COUNT leading pixels by transmitting COUNT black (0 0 0) pixels.
+;; For a single on-board LED pass 1; for an N-pixel strip pass N to blank the
+;; whole strip.
+(defun rgb-off (pin count)
+  (rgb-show pin (black-strip count)))

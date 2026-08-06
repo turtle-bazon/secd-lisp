@@ -53,12 +53,13 @@
    #:bytecode-header
    #:make-bytecode-header
    
-   ;; Linker
-   #:link
-   #:load-library
-   #:save-library
-   #:library
-   #:make-library
+    ;; Linker
+    #:link
+    #:link-machine
+    #:load-library
+    #:save-library
+    #:library
+    #:make-library
    
    ;; Tree shaker
    #:shake-tree
