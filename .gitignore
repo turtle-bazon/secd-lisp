@@ -8,3 +8,6 @@ output/*.uf2
 # editor swap
 *.swp
 *.swo
+
+# compiled binary
+build/

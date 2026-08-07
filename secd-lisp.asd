@@ -14,7 +14,8 @@
                #:cl-ppcre
                #:alexandria
                #:yason
-               #:zip)
+               #:zip
+               #:clingon)
   :serial t
   :components ((:module "src"
                 :serial t
@@ -27,4 +28,7 @@
                              (:file "codegen")
                              (:file "linker")
                              (:file "tree-shaker")
-                             (:file "main")))))
+                             (:file "main"))))
+  :build-operation "program-op"
+  :build-pathname "build/secd-lisp"
+  :entry-point "secd-lisp:main")

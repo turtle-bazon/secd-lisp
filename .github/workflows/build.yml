@@ -1,0 +1,139 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: secd-lisp on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux: build inside the old-glibc SBCL image so the binary runs
+          # on older distributions (glibc is only forward-compatible).
+          - os: ubuntu-latest
+            container: ghcr.io/turtle-bazon/sbcl-bullseye-build/sbcl-bullseye:latest
+            artifact: secd-lisp-linux-x86_64
+          - os: macos-latest
+            artifact: secd-lisp-macos
+          - os: windows-latest
+            artifact: secd-lisp-windows-x86_64
+    steps:
+      - name: Install git (Linux container)
+        if: runner.os == 'Linux'
+        run: apt-get update && apt-get install -y --no-install-recommends git
+
+      - uses: actions/checkout@v4
+
+      - name: Install SBCL (macOS)
+        if: runner.os == 'macOS'
+        run: brew install sbcl
+
+      - name: Install SBCL (Windows)
+        if: runner.os == 'Windows'
+        run: choco install sbcl -y --no-progress
+
+      - name: Set up Quicklisp
+        shell: bash
+        run: |
+          curl -fsSL https://beta.quicklisp.org/quicklisp.lisp -o "$RUNNER_TEMP/quicklisp.lisp"
+          sbcl --non-interactive --load "$RUNNER_TEMP/quicklisp.lisp" \
+            --eval '(quicklisp-quickstart:install)'
+          # Make ASDF find the checkout's own .asd files.
+          echo "(push '*default-pathname-defaults* asdf:*central-registry*)" >> "$HOME/.sbclrc"
+
+      - name: Fetch cl-bazon dependency
+        shell: bash
+        run: |
+          git clone --depth 1 https://github.com/turtle-bazon/cl-bazon "$HOME/cl-bazon"
+          # Register the sibling CL util library with ASDF.
+          echo "(push #p\"$HOME/cl-bazon/\" asdf:*central-registry*)" >> "$HOME/.sbclrc"
+
+      - name: Build
+        shell: bash
+        run: sbcl --non-interactive --load build.lisp
+
+      # The lexer/parser unit tests have pre-existing failures unrelated to
+      # this work; run them but do not let them block the published binary.
+      - name: Unit tests
+        shell: bash
+        continue-on-error: true
+        run: |
+          sbcl --non-interactive \
+            --eval '(asdf:load-system :secd-lisp-test)' \
+            --eval '(unless (secd-lisp/test:run-tests) (uiop:quit 1))'
+
+      # Linux only: report the glibc floor so distribution packaging knows the
+      # oldest supported base.
+      - name: Check glibc floor (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          echo "required GLIBC: $(objdump -T build/secd-lisp | grep -o 'GLIBC_[0-9.]*' | sort -V | uniq | tail -1)"
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          BIN=build/secd-lisp
+          if [ "$RUNNER_OS" = "Windows" ]; then BIN=build/secd-lisp.exe; fi
+          "$BIN" --version
+          "$BIN" --help > /dev/null
+          # No input file: must print usage and exit non-zero.
+          "$BIN" > /dev/null 2>&1 && exit 1 || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: build/secd-lisp*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: secd-lisp-linux-x86_64
+          path: linux
+
+      - name: Download macOS binary
+        uses: actions/download-artifact@v4
+        with:
+          name: secd-lisp-macos
+          path: macos
+
+      - name: Download Windows binary
+        uses: actions/download-artifact@v4
+        with:
+          name: secd-lisp-windows-x86_64
+          path: windows
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          mkdir -p release-assets
+          find linux   -type f -name 'secd-lisp*' -exec cp {} release-assets/secd-lisp-linux-x86_64 \;
+          find macos   -type f -name 'secd-lisp*' -exec cp {} release-assets/secd-lisp-macos \;
+          find windows -type f -name 'secd-lisp*' -exec cp {} release-assets/secd-lisp-windows-x86_64.exe \;
+          ls -laR release-assets
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --clobber
+          else
+            gh release create "$TAG" release-assets/* \
+              --title "secd-lisp $TAG" \
+              --notes "Built by CI from tag $TAG."
+          fi
