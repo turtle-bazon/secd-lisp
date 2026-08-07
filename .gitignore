@@ -4,3 +4,7 @@
 
 # generated firmware
 output/*.uf2
+
+# editor swap
+*.swp
+*.swo

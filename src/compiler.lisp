@@ -422,6 +422,28 @@ Resolves local definitions, then refers/aliases, then global names."
   (member name '(+ - * / mod neg = < > <= >= not car cdr cons print gc)
           :test #'eq))
 
+;;; USB primitives -> the USB device class they require. Used to raise a
+;;; descriptive compile error when a target cannot supply the class (e.g.
+;;; %hid-key on an ESP32-C3, whose USB has no HID).
+(defparameter *usb-class-map*
+  '(("%hid-key" . "hid")
+    ("%usb-hid-add" . "hid")
+    ("%usb-serial-add" . "serial")
+    ("%serial-write" . "serial")
+    ("%serial-read" . "serial")
+    ("%serial-avail" . "serial"))
+  "Primitive name -> USB device class it requires.")
+
+(defun ensure-usb-class (name)
+  "If NAME is a known USB primitive the current target cannot provide,
+raise a descriptive error."
+  (let ((req (assoc (symbol-name name) *usb-class-map* :test #'string-equal)))
+    (when req
+      (unless (usb-class-device-p (cdr req))
+        (error "~S is not supported on this target (~A):~%  ~A~%Choose a target whose USB controller provides that class (e.g. rp2040*)."
+               name (and *target* (target-name *target*))
+               (usb-note))))))
+
 ;;; Compile the target (operator) of a function or primitive call.
 ;;; Returns (values kind target) where kind is :func, :prim, or :lambda.
 ;;;   :func  - user function, target = bytecode address (emit OP_CALL)
@@ -441,7 +463,9 @@ Resolves local definitions, then refers/aliases, then global names."
            (values :prim prim-id))
           ((eq name 't) (compile-literal context t) (values :lambda nil))
           ((eq name 'nil) (compile-literal context nil) (values :lambda nil))
-          (t (error "Unknown function: ~A" name))))
+          (t
+           (ensure-usb-class name)
+           (error "Unknown function: ~A" name))))
       ;; Non-symbol operator (e.g. lambda expression): compile it
       (progn
         (compile-node context operator)
@@ -968,6 +992,7 @@ Resolves local definitions, then refers/aliases, then global names."
   "Compile an AST to SECD bytecode."
   (let ((context (make-compilation-context)))
     (when target
+      (setf *target* (load-target target))
       (load-target-primitives context target))
     (setf (compilation-context-entry context) entry)
     (compile-node context ast)

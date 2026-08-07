@@ -7,10 +7,10 @@
 ;;;; the reusable WS2812 driver from library/ws2812.lisp.
 ;;;;
 ;;;; Pattern (repeats forever):
-;;;;   Red    on 500 ms, off 500 ms,
-;;;;   Green  on 500 ms, off 500 ms,
-;;;;   Blue   on 500 ms, off 500 ms,
-;;;;   pause 1000 ms.
+;;;;   Red    on 250 ms, off 250 ms,
+;;;;   Green  on 250 ms, off 250 ms,
+;;;;   Blue   on 250 ms, off 250 ms,
+;;;;   pause 500 ms.
 ;;;;
 ;;;; The on-board NeoPixel on the Waveshare RP2040/RP2350 Zero is on pin 16
 ;;;; (pin 8 on the ESP32-C3 SuperMini).
@@ -37,7 +37,7 @@
 (defun main ()
   (%gpio-init +led-pin+ :output)
   (loop
-    (blink +led-pin+ (list 255 0 0) 500 500)
-    (blink +led-pin+ (list 0 255 0) 500 500)
-    (blink +led-pin+ (list 0 0 255) 500 500)
-    (%sleep 1000)))
+    (blink +led-pin+ (list 64 0 0) 250 250)
+    (blink +led-pin+ (list 0 64 0) 250 250)
+    (blink +led-pin+ (list 0 0 64) 250 250)
+    (%sleep 500)))

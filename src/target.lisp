@@ -21,6 +21,7 @@
   flash-layout
   features
   primitives
+  usb
   constraints
   firmware-path)  ; Path to .machine file
 
@@ -88,6 +89,7 @@
          :flash-layout (gethash "flash_layout" metadata)
          :features (gethash "features" metadata)
          :primitives (gethash "primitives" metadata)
+         :usb (gethash "usb" metadata)
          :constraints (gethash "constraints" metadata)
          :firmware-path file)))))
 
@@ -159,6 +161,31 @@ the output carries the full resolved target definition."
        (let ((primitives (target-primitives *target*)))
          (and primitives
               (gethash name primitives)))))
+
+;;; USB capability introspection
+;;; The .machine metadata "usb" section is:
+;;;   { "device": bool, "controller": <str>, "note": <str>,
+;;;     "cdc": { "device": bool, "max_ports": n },
+;;;     "hid": { "device": bool } }
+(defun usb-info ()
+  "Return the current target's USB metadata hash (or NIL if absent)."
+  (and *target* (target-usb *target*)))
+
+(defun usb-class-device-p (class)
+  "True if the current target's USB stack exposes CLASS (e.g. \"hid\").
+Errors gracefully and rules through :device when there is no USB at all."
+  (let* ((usb (usb-info)))
+    (and usb
+         (gethash "device" usb)
+         (let ((cls (gethash class usb)))
+           (and cls (gethash "device" cls))))))
+
+(defun usb-note ()
+  "Human-readable text about the target's USB (for error messages)."
+  (let ((usb (usb-info)))
+    (if usb
+        (format nil "~A" (gethash "note" usb))
+        "This target has no USB serial/HID interface.")))
 
 ;;; Validate symbol name against constraints
 (defun validate-symbol-name (name)
