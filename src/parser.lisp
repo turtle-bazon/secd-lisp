@@ -88,6 +88,13 @@
        (parser-advance parser)
        (make-nil-node :line (token-line token) :column (token-column token)))
       
+      ;; Byte-vector literal
+      (:byte-vector
+       (parser-advance parser)
+       (make-byte-vector-node (token-value token)
+                              :line (token-line token)
+                              :column (token-column token)))
+      
       ;; Symbol
       (:symbol
        (parser-advance parser)
@@ -183,6 +190,28 @@
          (t nil))))
     (t nil)))
 
+;;; Convert a parsed let-binding-list node into a list of (name . value)
+;;; pairs. NAME is a symbol, VALUE the init expression AST node.
+;;; The parser represents a list as an application chain: the operator is the
+;;; first element and the operands are the rest. Each binding `(name value)`
+;;; is itself such an application node. `()` -> nil.
+(defun parse-binding-list (node)
+  "Extract a list of (NAME . VALUE-NODE) binding pairs from a parsed list node."
+  (if (ast-application-p node)
+      (let ((op (ast-node-value node)))
+        (cond
+          ((and (ast-symbol-p op)
+                (string= (symbol-name (ast-node-value op)) "FUNCALL")
+                (null (ast-node-children node)))
+           nil)
+          (t
+           (mapcar (lambda (binding)
+                     (cons (ast-node-value (ast-node-value binding))
+                           (first (ast-node-children binding))))
+                   (cons (ast-node-value node)
+                         (ast-node-children node))))))
+      nil))
+
 ;;; Build an AST node from a parsed list's elements.
 ;;; Elements are collected in reverse order (via push).
 (defun build-list-node (elements open-token)
@@ -234,16 +263,31 @@
        (make-ast-node :type :cond :children args
                       :line line :column col))
       ((string= sname "LET")
-       (make-ast-node :type :let :children args
+       (make-ast-node :type :let
+                      :value (parse-binding-list (first args))
+                      :children (rest args)
                       :line line :column col))
       ((string= sname "LET*")
-       (make-ast-node :type :let* :children args
+       (make-ast-node :type :let*
+                      :value (parse-binding-list (first args))
+                      :children (rest args)
                       :line line :column col))
       ((string= sname "PROGN")
        (make-progn-node args :line line :column col))
       ((or (string= sname "SETF") (string= sname "SET!"))
-       (make-setf-node (ast-node-value (first args)) (second args)
-                       :line line :column col))
+       (let ((place (first args)))
+         (if (and (ast-application-p place)
+                  (ast-symbol-p (ast-node-value place))
+                  (string= (symbol-name (ast-node-value (ast-node-value place)))
+                           "VREF"))
+             ;; (setf (vref vec idx) value): keep the whole place form so the
+             ;; compiler can see vec and idx.
+             (make-ast-node :type :setf :value place
+                            :children (list (second args))
+                            :line line :column col)
+             ;; Plain variable assignment.
+             (make-setf-node (ast-node-value place) (second args)
+                             :line line :column col))))
       ((string= sname "LOOP")
        (make-ast-node :type :loop :children args
                       :line line :column col))

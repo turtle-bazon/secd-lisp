@@ -28,6 +28,7 @@
 ;; :nil           - Nil literal
 ;; :list          - List literal
 ;; :pair          - Cons pair
+;; :byte-vector   - Byte-vector literal (value = list of byte values)
 ;; :if            - Conditional
 ;; :when          - When conditional
 ;; :unless        - Unless conditional
@@ -111,6 +112,11 @@
                  :children (list value)
                  :line line :column column))
 
+(defun make-byte-vector-node (bytes &key (line 0) (column 0))
+  "Create a byte-vector literal node (BYTES is a list of 0..255 integers)."
+  (make-ast-node :type :byte-vector :value bytes
+                 :line line :column column))
+
 (defun make-application-node (operator operands &key (line 0) (column 0))
   "Create a function application node."
   (make-ast-node :type :application :value operator
@@ -149,7 +155,11 @@
 
 (defun ast-literal-p (node)
   "Check if node is a literal (not a symbol or application)."
-  (member (ast-node-type node) '(:integer :float :string :character :boolean :nil :list)))
+  (member (ast-node-type node) '(:integer :float :string :character :boolean :nil :list :byte-vector)))
+
+(defun ast-byte-vector-p (node)
+  "Check if node is a byte-vector literal."
+  (eq (ast-node-type node) :byte-vector))
 
 (defun ast-application-p (node)
   "Check if node is a function application."

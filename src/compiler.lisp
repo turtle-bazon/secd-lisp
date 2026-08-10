@@ -23,6 +23,8 @@
   (current-package "SECD" :type string)  ; package symbols resolve in
   (packages (make-hash-table :test 'equal) :type hash-table)  ; package name -> (required refers exports)
   (top-level-constants (make-hash-table :test 'equal) :type hash-table)  ; canon name -> literal value
+  (bytevec-pool nil :type list)  ; byte-vector literals, each a list of byte values; slot order = list order (deduped, equal test)
+  (bytevec-slots (make-hash-table :test 'equal) :type hash-table)  ; pool bytes -> slot index
   (entry "SECD:MAIN" :type string))  ; entry point function, "PKG:FN", chosen at build time
 
 ;;; Bytecode instructions (matching secd-machine bytecode.h)
@@ -46,6 +48,11 @@
 (defconstant +op-car+ #x30)
 (defconstant +op-cdr+ #x31)
 (defconstant +op-cons+ #x32)
+(defconstant +op-ldv+ #x33)
+(defconstant +op-vref+ #x34)
+(defconstant +op-vstor+ #x35)
+(defconstant +op-mkv+ #x36)
+(defconstant +op-len+ #x37)
 (defconstant +op-ld+ #x40)
 (defconstant +op-st+ #x41)
 (defconstant +op-args+ #x42)
@@ -64,6 +71,9 @@
 (defconstant +op-nop+ #x7b)
 (defconstant +op-pop+ #x7c)
 (defconstant +op-error+ #xff)
+
+;; Pool footer magic (must match SECD_POOL_MAGIC in the C runtime)
+(defconstant +pool-magic+ #xB1C5)
 
 ;;; Emit a byte
 (defun emit-byte (context byte)
@@ -90,6 +100,54 @@
         (push value (compilation-context-constants-list context))
         index)))
 
+;;; Get or create the ROM pool slot for a byte-vector literal (a list of byte
+;;; values). Deduplicates identical literals by value.
+(defun get-bytevec-slot (context bytes)
+  "Return the ROM pool slot for byte-vector literal BYTES, adding it if new."
+  (or (gethash bytes (compilation-context-bytevec-slots context))
+      (let ((slot (length (compilation-context-bytevec-pool context))))
+        (setf (gethash bytes (compilation-context-bytevec-slots context)) slot)
+        (setf (compilation-context-bytevec-pool context)
+              (nconc (compilation-context-bytevec-pool context) (list bytes)))
+        slot)))
+
+;;; Emit OP_LDV for a byte-vector literal
+(defun emit-bytevec-literal (context bytes)
+  "Emit LDV for byte-vector literal BYTES and return its pool slot."
+  (let ((slot (get-bytevec-slot context bytes)))
+    (emit-opcode context +op-ldv+)
+    (emit-u16 context slot)
+    slot))
+
+;;; Append the ROM byte-vector pool to the code buffer, after OP_STOP.
+;;; Layout (big-endian), matching the C loader in bytecode.cpp:
+;;;   [u16 count]
+;;;   count * (u16 offset, u16 len)   -- offset relative to first data byte
+;;;   [byte blobs]
+;;;   [u16 pool_size]                 -- bytes of everything above
+;;;   [u16 magic 0xB1C5]
+(defun emit-bytevec-pool (context)
+  "Append the collected byte-vector pool and footer to the code buffer."
+  (let ((pool (compilation-context-bytevec-pool context)))
+    (when pool
+      (emit-u16 context (length pool))
+      ;; Directory: offsets are relative to the first data byte
+      (let ((total 0))
+        (dolist (bytes pool)
+          (incf total (length bytes)))
+        (let ((offset 0))
+          (dolist (bytes pool)
+            (emit-u16 context offset)
+            (emit-u16 context (length bytes))
+            (incf offset (length bytes)))
+          ;; Data blobs
+          (dolist (bytes pool)
+            (dolist (b bytes)
+              (emit-byte context b)))
+          ;; Footer
+          (emit-u16 context (+ 2 (* 4 (length pool)) total))
+          (emit-u16 context +pool-magic+))))))
+
 ;;; Compile a literal value
 (defun compile-literal (context value)
   "Compile a literal value."
@@ -97,6 +155,12 @@
     ((integerp value)
      (emit-opcode context +op-ldc+)
      (emit-u16 context (logand value #xffff)))
+    ((vectorp value)
+     ;; Byte-vector literal (list of bytes). Guard against strings.
+     (when (and (vectorp value)
+                (not (every #'integerp (coerce value 'list))))
+       (error "Cannot compile literal: ~A" value))
+     (emit-bytevec-literal context (coerce value 'list)))
     ((eq value t)
      (emit-opcode context +op-ldc+)
      (emit-u16 context 1)) ; True is 1
@@ -419,7 +483,8 @@ Resolves local definitions, then refers/aliases, then global names."
 ;;; Symbols compiled directly to VM opcodes
 (defun builtin-opcode-p (name)
   "Check if a symbol is a builtin VM opcode."
-  (member name '(+ - * / mod neg = < > <= >= not car cdr cons print gc)
+  (member name '(+ - * / mod neg = < > <= >= not car cdr cons print gc
+                  vref length make-vector)
           :test #'eq))
 
 ;;; USB primitives -> the USB device class they require. Used to raise a
@@ -588,6 +653,8 @@ raise a descriptive error."
                   ((eq (ast-node-type value-node) :boolean)
                    (ast-node-value value-node))
                   ((eq (ast-node-type value-node) :nil) nil)
+                  ((ast-byte-vector-p value-node)
+                   (coerce (ast-node-value value-node) 'vector))
                   ((ast-symbol-p value-node)
                    (let ((v (ast-node-value value-node)))
                      (cond ((eq v 't) t)
@@ -660,6 +727,10 @@ raise a descriptive error."
     (:integer
      (compile-literal context (ast-node-value node)))
     
+    ;; Byte-vector literal #( ... )
+    (:byte-vector
+     (emit-bytevec-literal context (ast-node-value node)))
+    
     ;; Boolean literal
     (:boolean
      (compile-literal context (ast-node-value node)))
@@ -699,6 +770,10 @@ raise a descriptive error."
          ((eq name 'car) (emit-opcode context +op-car+))
          ((eq name 'cdr) (emit-opcode context +op-cdr+))
          ((eq name 'cons) (emit-opcode context +op-cons+))
+         ;; Byte-vector operations
+         ((eq name 'vref) (emit-opcode context +op-vref+))
+         ((eq name 'length) (emit-opcode context +op-len+))
+         ((eq name 'make-vector) (emit-opcode context +op-mkv+))
          ;; Boolean operations
          ((eq name 'not) (emit-opcode context +op-not+))
          ;; I/O operations
@@ -876,17 +951,19 @@ raise a descriptive error."
                      (logand post #xff))))))))
     
     ;; Let
-    (:let
-     (let ((bindings (first (ast-node-children node)))
-           (body (rest (ast-node-children node))))
-       ;; Compile bindings
+(:let
+     (let ((bindings (ast-node-value node))
+           (body (ast-node-children node)))
+       ;; Compile all init expressions in the enclosing scope (parallel let:
+       ;; none of the new bindings are visible while computing inits)
        (dolist (binding bindings)
-         (compile-node context (second binding))) ; Compile value
-       ;; Emit ARGS to create environment
+         (compile-node context (cdr binding))) ; compile value
+       ;; Emit ARGS to create the environment
        (emit-opcode context +op-args+)
        (emit-byte context (length bindings))
        ;; Scope frame for the let bindings (order matches ARGS binding order)
-       (push (mapcar #'first bindings) (compilation-context-scopes context))
+       (push (mapcar (lambda (b) (canonical-sym context (car b))) bindings)
+             (compilation-context-scopes context))
        ;; Compile body
        (dolist (expr body)
          (compile-node context expr))
@@ -895,16 +972,17 @@ raise a descriptive error."
     
     ;; Let*
     (:let*
-     (let ((bindings (first (ast-node-children node)))
-           (body (rest (ast-node-children node))))
+     (let ((bindings (ast-node-value node))
+           (body (ast-node-children node)))
        ;; Compile bindings one by one
        (dolist (binding bindings)
-         (compile-node context (second binding)) ; Compile value
+         (compile-node context (cdr binding)) ; compile value
          ;; Emit ARGS for each binding
          (emit-opcode context +op-args+)
          (emit-byte context 1)
          ;; Each binding is its own scope frame
-         (push (list (first binding)) (compilation-context-scopes context)))
+         (push (list (canonical-sym context (car binding)))
+               (compilation-context-scopes context)))
        ;; Compile body
        (dolist (expr body)
          (compile-node context expr))
@@ -946,14 +1024,23 @@ raise a descriptive error."
     
     ;; Setf
     (:setf
-     (let ((name (ast-node-value node))
+     (let ((place (ast-node-value node))
            (value (first (ast-node-children node))))
-       ;; Compile value
-       (compile-node context value)
-       ;; Emit ST to store in environment
-       (emit-opcode context +op-st+)
-       (let ((idx (variable-index context name)))
-         (emit-u16 context (or idx (get-constant-index context name))))))
+       ;; (setf (vref vec idx) value): place is the application node
+       (if (ast-application-p place)
+           ;; Compile vec, idx, then value; VSTOR pops (val idx vec) in that
+           ;; order, so push vec first, then idx, then the value.
+           (progn
+             (dolist (operand (ast-node-children place))
+               (compile-node context operand))
+             (compile-node context value)
+             (emit-opcode context +op-vstor+))
+           ;; Plain variable assignment: name is a symbol
+           (progn
+             (compile-node context value)
+             (emit-opcode context +op-st+)
+             (let ((idx (variable-index context place)))
+               (emit-u16 context (or idx (get-constant-index context place))))))))
     
     ;; Progn
     (:progn
@@ -997,6 +1084,8 @@ raise a descriptive error."
     (setf (compilation-context-entry context) entry)
     (compile-node context ast)
     (emit-opcode context +op-stop+)
+    ;; ROM byte-vector pool + footer (after OP_STOP; see SECD_POOL_MAGIC)
+    (emit-bytevec-pool context)
     (compilation-context-code context)))
 
 ;;; Compile a file

@@ -186,6 +186,40 @@
     (let ((ch (lexer-advance lexer)))
       (make-token :boolean (eql ch #\t) start-line start-col))))
 
+;;; Read a byte-vector literal #(b0 b1 ... bn).
+;;; Each element must be an integer literal in 0..255; returns a :byte-vector
+;;; token whose value is a list of byte values.
+(defun lexer-read-byte-vector (lexer)
+  "Read a #(...) byte-vector literal from the input."
+  (let ((start-line (lexer-line lexer))
+        (start-col (lexer-column lexer)))
+    ;; Skip #(
+    (lexer-advance lexer)
+    (lexer-advance lexer)
+    (lexer-skip-whitespace lexer)
+    (let ((bytes nil))
+      (loop
+        (let ((ch (lexer-peek lexer)))
+          (cond
+            ((null ch)
+             (error "Unterminated byte-vector literal"))
+            ((eql ch #\))
+             (lexer-advance lexer)
+             (return (make-token :byte-vector (nreverse bytes)
+                                 start-line start-col)))
+            ((member ch '(#\Space #\Tab #\Newline #\Return))
+             (lexer-skip-whitespace lexer))
+            (t
+             (lexer-skip-whitespace lexer)
+             (let ((token (next-token lexer)))
+               (unless (eq (token-type token) :integer)
+                 (error "Byte-vector elements must be integer literals, got ~A"
+                        (token-type token)))
+               (let ((val (token-value token)))
+                 (when (or (< val 0) (> val 255))
+                   (error "Byte-vector element out of range 0..255: ~A" val))
+                 (push val bytes))))))))))
+
 ;;; Get next token
 (defun next-token (lexer)
   "Get the next token from the lexer."
@@ -229,6 +263,9 @@
       ;; Boolean
       ((and (eql ch #\#) (member (lexer-peek lexer 1) '(#\t #\f)))
        (lexer-read-boolean lexer))
+      ;; Byte-vector literal #( ... )
+      ((and (eql ch #\#) (eql (lexer-peek lexer 1) #\())
+       (lexer-read-byte-vector lexer))
       ;; Dot
       ((eql ch #\.)
        (lexer-advance lexer)

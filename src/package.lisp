@@ -39,6 +39,11 @@
    #:make-quote-node
    #:make-progn-node
    #:make-setf-node
+   #:make-byte-vector-node
+   #:ast-symbol-p
+   #:ast-application-p
+   #:ast-byte-vector-p
+   #:ast-literal-p
    
    ;; Compiler
    #:secd-compile-file

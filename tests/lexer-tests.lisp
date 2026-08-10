@@ -10,11 +10,13 @@
 
 (in-suite lexer-tests)
 
+(defun secd-foo () (find-symbol "FOO" "SECD-LISP"))
+
 (test tokenize-symbol
   (let ((tokens (secd-lisp:tokenize "foo")))
     (is (= (length tokens) 2)) ; symbol + eof
     (is (eq (secd-lisp:token-type (first tokens)) :symbol))
-    (is (eq (secd-lisp:token-value (first tokens)) 'foo))))
+    (is (eq (secd-lisp:token-value (first tokens)) (secd-foo)))))
 
 (test tokenize-integer
   (let ((tokens (secd-lisp:tokenize "42")))
@@ -36,7 +38,7 @@
 
 (test tokenize-list
   (let ((tokens (secd-lisp:tokenize "(+ 1 2)")))
-    (is (= (length tokens) 7)))) ; ( + 1 2 ) + eof
+    (is (= (length tokens) 6)))) ; ( + 1 2 ) + eof
 
 (test tokenize-quote
   (let ((tokens (secd-lisp:tokenize "'foo")))
@@ -47,4 +49,26 @@
   (let ((tokens (secd-lisp:tokenize "\"hello\\nworld\"")))
     (is (= (length tokens) 2)) ; string + eof
     (is (eq (secd-lisp:token-type (first tokens)) :string))
-    (is (string= (secd-lisp:token-value (first tokens)) "hello\nworld"))))
+    ;; NOTE: `\n` in this test is backslash + n; the lexer maps it to newline.
+    (is (string= (secd-lisp:token-value (first tokens))
+                 (concatenate 'string "hello" (string #\Newline) "world")))))
+
+(test tokenize-byte-vector
+  (let ((tokens (secd-lisp:tokenize "#(1 2 42 4)")))
+    (is (= (length tokens) 2)) ; byte-vector + eof
+    (is (eq (secd-lisp:token-type (first tokens)) :byte-vector))
+    (is (equal (secd-lisp:token-value (first tokens)) '(1 2 42 4)))))
+
+(test tokenize-byte-vector-empty
+  (let ((tokens (secd-lisp:tokenize "#()")))
+    (is (= (length tokens) 2))
+    (is (eq (secd-lisp:token-type (first tokens)) :byte-vector))
+    (is (equal (secd-lisp:token-value (first tokens)) nil))))
+
+(test tokenize-byte-vector-out-of-range
+  (signals error
+    (secd-lisp:tokenize "#(0 256)")))
+
+(test tokenize-byte-vector-non-integer
+  (signals error
+    (secd-lisp:tokenize "#(a b)")))
