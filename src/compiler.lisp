@@ -492,7 +492,9 @@ Resolves local definitions, then refers/aliases, then global names."
 ;;; %hid-key on an ESP32-C3, whose USB has no HID).
 (defparameter *usb-class-map*
   '(("%hid-key" . "hid")
+    ("%hid-mouse" . "hid")
     ("%usb-hid-add" . "hid")
+    ("%usb-mouse-add" . "hid")
     ("%usb-serial-add" . "serial")
     ("%serial-write" . "serial")
     ("%serial-read" . "serial")
