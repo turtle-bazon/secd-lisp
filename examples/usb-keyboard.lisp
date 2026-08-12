@@ -17,6 +17,11 @@
 ;;;; USB controller supports the HID device class (see the target's .machine
 ;;;; metadata "usb" section). It will not compile on e.g. the ESP32-C3, whose
 ;;;; USB is a fixed-function Serial/JTAG port (no HID).
+;;;;
+;;;; Because main lives in the USB-KEYBOARD package (not SECD), point the
+;;;; linker at it explicitly:
+;;;;   (secd-lisp:secd-compile-file "examples/usb-keyboard.lisp"
+;;;;                                :target :rp2040 :entry "USB-KEYBOARD:MAIN")
 
 (defpackage :usb-keyboard)
 
