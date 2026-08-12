@@ -70,3 +70,13 @@
                    "(defun main () (let ((v #(1 2 3))) (vref v 1)))")))
     (is (bytecode-has bytecode #x33))                 ; LDV
     (is (bytecode-has bytecode #x34))))               ; VREF
+
+(test compile-cond
+  ;; cond clauses parse as application nodes (test = operator, body =
+  ;; operands); compiling a multi-clause cond must not choke on the clause
+  ;; nodes (regression for the (first <ast-node>) type error). SEL is 0x50.
+  (let ((bytecode (secd-lisp:compile-string
+                   "(defun main () (cond ((= 1 1) 10) (t 20)))")))
+    (is (bytecode-has bytecode #x50))                 ; SEL
+    (is (bytecode-has bytecode #x0A))                 ; then value 10
+    (is (bytecode-has bytecode #x14))))               ; else value 20

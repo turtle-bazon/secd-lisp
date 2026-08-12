@@ -998,15 +998,17 @@ raise a descriptive error."
        (when (null clauses)
          (compile-literal context nil)
          (return-from compile-node))
-       ;; Compile first clause
-       (let ((clause (first clauses)))
-         (compile-node context (first clause)) ; Condition
-         (emit-opcode context +op-sel+)
-         (let ((else-pos (length (compilation-context-code context))))
-           (emit-u16 context 0) ; Placeholder for else address
-           ;; Compile then body (executed when cond TRUE)
-           (dolist (expr (rest clause))
-             (compile-node context expr))
+       ;; Compile first clause. A clause ((test) body...) parses as an
+        ;; application node: the test is the operator (ast-node-value) and the
+        ;; body forms are the operands (ast-node-children).
+        (let ((clause (first clauses)))
+          (compile-node context (ast-node-value clause)) ; Condition
+          (emit-opcode context +op-sel+)
+          (let ((else-pos (length (compilation-context-code context))))
+            (emit-u16 context 0) ; Placeholder for else address
+            ;; Compile then body (executed when cond TRUE)
+            (dolist (expr (ast-node-children clause))
+              (compile-node context expr))
            (emit-opcode context +op-jmp+)
            (let ((post-pos (length (compilation-context-code context))))
              (emit-u16 context 0) ;; Placeholder for post
