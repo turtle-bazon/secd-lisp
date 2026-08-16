@@ -23,6 +23,9 @@
   (current-package "SECD" :type string)  ; package symbols resolve in
   (packages (make-hash-table :test 'equal) :type hash-table)  ; package name -> (required refers exports)
   (top-level-constants (make-hash-table :test 'equal) :type hash-table)  ; canon name -> literal value
+  (top-level-variables (make-hash-table :test 'equal) :type hash-table)  ; canon name -> global cell index
+  (top-level-variable-order nil :type list)  ; canonical names in declaration order (global frame layout)
+  (top-level-variable-inits (make-hash-table :test 'equal) :type hash-table)  ; canon name -> init AST node (or nil)
   (bytevec-pool nil :type list)  ; byte-vector literals, each a list of byte values; slot order = list order (deduped, equal test)
   (bytevec-slots (make-hash-table :test 'equal) :type hash-table)  ; pool bytes -> slot index
   (entry "SECD:MAIN" :type string))  ; entry point function, "PKG:FN", chosen at build time
@@ -56,6 +59,8 @@
 (defconstant +op-ld+ #x40)
 (defconstant +op-st+ #x41)
 (defconstant +op-args+ #x42)
+(defconstant +op-ldg+ #x43)
+(defconstant +op-stg+ #x44)
 (defconstant +op-sel+ #x50)
 (defconstant +op-join+ #x51)
 (defconstant +op-loop+ #x52)
@@ -471,14 +476,19 @@ Resolves local definitions, then refers/aliases, then global names."
           (let ((const (gethash canon (compilation-context-top-level-constants context))))
             (if const
                 (compile-literal context const)
-                ;; Unresolved symbol: resolve refers/aliases, else keep a
-                ;; placeholder constant reference.
+                ;; Resolve refers/aliases, then check for a defvar'd global.
                 (let* ((pkg (compilation-context-current-package context))
                        (ref (unless (find #\: s)
-                              (assoc s (package-refers context pkg) :test #'string-equal))))
-                  (emit-opcode context +op-ldc+)
-                  (emit-u16 context (get-constant-index context
-                                                        (if ref (cdr ref) canon))))))))))
+                              (assoc s (package-refers context pkg) :test #'string-equal)))
+                       (resolved (if ref (cdr ref) canon))
+                       (gslot (gethash resolved (compilation-context-top-level-variables context))))
+                  (if gslot
+                      (progn
+                        (emit-opcode context +op-ldg+)
+                        (emit-u16 context gslot))
+                      ;; Undefined symbol: this is a hard compile error, not
+                      ;; a placeholder constant.
+                      (error "Undefined symbol: ~A" s)))))))))
 
 ;;; Symbols compiled directly to VM opcodes
 (defun builtin-opcode-p (name)
@@ -667,6 +677,32 @@ raise a descriptive error."
                             (ast-node-type value-node))))))
     (setf (gethash canon (compilation-context-top-level-constants context)) value)))
 
+;;; Compile a top-level (defvar NAME [value]). Registers NAME as a global
+;;; variable cell; the initializer is emitted at program entry (before main).
+(defun compile-defvar (context node)
+  (let* ((name (ast-node-value node))
+         (canon (canonical-sym context name)))
+    (when (gethash canon (compilation-context-top-level-constants context))
+      (error "Cannot defvar ~A: already a defconstant" name))
+    (unless (gethash canon (compilation-context-top-level-variables context))
+      (setf (gethash canon (compilation-context-top-level-variables context))
+            (length (compilation-context-top-level-variable-order context)))
+      (push canon (compilation-context-top-level-variable-order context))
+      (setf (gethash canon (compilation-context-top-level-variable-inits context))
+            (first (ast-node-children node))))))
+
+;;; Emit the global-frame initialization at program entry: for each defvar'd
+;;; global in declaration order, push its initializer (or NIL) and STG it.
+(defun emit-global-inits (context)
+  (dolist (canon (reverse (compilation-context-top-level-variable-order context)))
+    (let* ((init (gethash canon (compilation-context-top-level-variable-inits context)))
+           (slot (gethash canon (compilation-context-top-level-variables context))))
+      (if init
+          (compile-node context init)
+          (compile-literal context nil))
+      (emit-opcode context +op-stg+)
+      (emit-u16 context slot))))
+
 ;;; Process top-level forms in source order: package directives, require/load
 ;;; and defuns. Only these are allowed at the top level; the program entry
 ;;; point is always (defun main ()) in the SECD package.
@@ -684,8 +720,10 @@ raise a descriptive error."
        (compile-node context form))
       ((eq (ast-node-type form) :defconstant)
        (compile-defconstant context form))
+      ((eq (ast-node-type form) :defvar)
+       (compile-defvar context form))
       (t
-       (error "Unexpected top-level form (~A); only defun, defpackage, in-package, require, load and defconstant are allowed"
+       (error "Unexpected top-level form (~A); only defun, defpackage, in-package, require, load, defconstant and defvar are allowed"
               (ast-node-type form))))))
 
 ;;; Compile an AST node
@@ -709,6 +747,8 @@ raise a descriptive error."
        (process-top-level-forms context children nil)
        ;; Record where the entry code begins
        (setf entry-start (length (compilation-context-code context)))
+       ;; Initialize defvar'd globals before calling the entry point
+       (emit-global-inits context)
        ;; Entry point: the function chosen at build time (:entry "PKG:FN",
        ;; default SECD:MAIN). A program that declares its own package sets
        ;; the entry to its package's main, e.g. :entry "rgb-blink:main".
@@ -1031,7 +1071,9 @@ raise a descriptive error."
      (let ((place (ast-node-value node))
            (value (first (ast-node-children node))))
        ;; (setf (vref vec idx) value): place is the application node
-       (if (ast-application-p place)
+       ;; (parser keeps the whole place form); plain variable assignment
+       ;; stores a raw symbol.
+       (if (and (ast-node-p place) (ast-application-p place))
            ;; Compile vec, idx, then value; VSTOR pops (val idx vec) in that
            ;; order, so push vec first, then idx, then the value.
            (progn
@@ -1039,12 +1081,31 @@ raise a descriptive error."
                (compile-node context operand))
              (compile-node context value)
              (emit-opcode context +op-vstor+))
-           ;; Plain variable assignment: name is a symbol
-           (progn
-             (compile-node context value)
-             (emit-opcode context +op-st+)
-             (let ((idx (variable-index context place)))
-               (emit-u16 context (or idx (get-constant-index context place))))))))
+;; Plain variable assignment: name is a symbol
+            (progn
+              (compile-node context value)
+              (let* ((pname (symbol-name place))
+                     (canon (canonical-sym context place))
+                     (idx (variable-index context canon)))
+                (if idx
+                    (progn
+                      (emit-opcode context +op-st+)
+                      (emit-u16 context idx))
+                    ;; Not a local: it must be a defvar'd global. Implicit
+                    ;; globals are not allowed, and constants cannot be setf'd.
+                    (let* ((pkg (compilation-context-current-package context))
+                           (ref (unless (find #\: pname)
+                                  (assoc pname (package-refers context pkg) :test #'string-equal)))
+                           (resolved (if ref (cdr ref) canon))
+                           (gslot (gethash resolved (compilation-context-top-level-variables context))))
+                      (cond
+                        (gslot
+                         (emit-opcode context +op-stg+)
+                         (emit-u16 context gslot))
+                        ((gethash resolved (compilation-context-top-level-constants context))
+                         (error "Cannot setf constant ~A" place))
+                        (t
+                         (error "Cannot setf undefined variable ~A" place))))))))))
     
     ;; Progn
     (:progn

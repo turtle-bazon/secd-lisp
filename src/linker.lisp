@@ -43,6 +43,24 @@ Defaults to RP2040 for nil/unknown families."
     ((string-equal family-name "samd21") +samd21-flash-base+)
     (t +rp2040-flash-base+)))
 
+;;; ESP32 (esp32s3): firmware.bin is concatenated with the SECD-header bytecode
+;;; (a plain `cat firmware.bin bytecode.secd > final.bin`).  No fixed bytecode
+;;; offset: the firmware locates the bytecode at runtime by scanning past its
+;;; own image end, so firmware size changes (added/removed features) never
+;;; require re-linking or re-flashing a different layout.
+
+(defun machine-family-name (machine-path)
+  "Read output.family from the .machine metadata.json (or nil)."
+  (zip:with-zipfile (zip machine-path)
+    (let ((entry (zip:get-zipfile-entry "metadata.json" zip)))
+      (when entry
+        (let* ((metadata-data (zip:zipfile-entry-contents entry))
+               (metadata (yason:parse
+                          (map 'string #'code-char metadata-data)))
+               (output (gethash "output" metadata)))
+          (when output
+            (gethash "family" output)))))))
+
 ;;; Helper: write 32-bit LE
 (defun write-u32-le (buf offset value)
   (setf (aref buf offset) (logand value #xFF))
@@ -243,7 +261,58 @@ Returns (values family-id flash-base)."
                         (uf2-flash-base family-name)))))))))
   (values +rp2040-family-id+ +rp2040-flash-base+))
 
+(defun read-zip-entry (zip-path entry-name)
+  "Read a raw byte array entry out of a .machine zip."
+  (zip:with-zipfile (zip zip-path)
+    (let ((entry (zip:get-zipfile-entry entry-name zip)))
+      (unless entry (error "No ~A in ~A" entry-name zip-path))
+      (zip:zipfile-entry-contents entry))))
+
+(defun write-raw-file (path bytes)
+  "Write BYTES to PATH, superseding anything already there."
+  (with-open-file (stream path :direction :output
+                                 :element-type '(unsigned-byte 8)
+                                 :if-exists :supersede)
+    (write-sequence bytes stream)))
+
+(defun bytecode-path (output-path)
+  "Path of the standalone .secd bytecode file next to OUTPUT-PATH."
+  (merge-pathnames (make-pathname :name (pathname-name output-path)
+                                  :type "secd")
+                   output-path))
+
+(defun link-machine-esp32 (machine-path bytecode output-path)
+  "ESP32 link: concatenate firmware.bin with the SECD-header bytecode and write
+the standalone .secd alongside. Flash the .bin at the app offset (0x10000); the
+bytecode follows the firmware image, located at runtime by scanning.
+Equivalent to:  cat firmware.bin <bytecode>.secd > final.bin"
+  (let* ((firmware (read-zip-entry machine-path "firmware.bin"))
+         (bytecode-with-header (serialize-bytecode bytecode))
+         (combined (make-array (+ (length firmware)
+                                  (length bytecode-with-header))
+                               :element-type '(unsigned-byte 8))))
+    (replace combined firmware)
+    (replace combined bytecode-with-header :start1 (length firmware))
+    (write-raw-file output-path combined)
+    (write-raw-file (bytecode-path output-path) bytecode-with-header)
+    (format t "Firmware: ~A bytes~%" (length firmware))
+    (format t "Bytecode: ~A bytes (header + ~A)~%"
+            (length bytecode-with-header) (length bytecode))
+    (format t "Final image: ~A~%" output-path))
+  output-path)
+
 (defun link-machine (machine-path bytecode output-path)
+  "Link bytecode with a .machine file to produce the final flash image.
+UF2 targets (rp2040/rp2350/samd21) get a .uf2; ESP32 targets get a single
+concatenated .bin (see link-machine-esp32)."
+  (let ((family-name (machine-family-name machine-path)))
+    (if (and family-name
+             (or (string-equal family-name "esp32s3")
+                 (string-equal family-name "esp32c3")))
+        (link-machine-esp32 machine-path bytecode output-path)
+        (link-machine-uf2 machine-path bytecode output-path))))
+
+(defun link-machine-uf2 (machine-path bytecode output-path)
   "Link bytecode with .machine file to produce .uf2.
 The .machine file contains firmware.uf2 + metadata.json. The firmware
 blocks are extracted back to raw binary, then re-linked with the bytecode."

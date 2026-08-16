@@ -80,3 +80,36 @@
     (is (bytecode-has bytecode #x50))                 ; SEL
     (is (bytecode-has bytecode #x0A))                 ; then value 10
     (is (bytecode-has bytecode #x14))))               ; else value 20
+
+(test compile-defvar-global
+  ;; A top-level (defvar NAME [value]) declares a global cell: the
+  ;; initializer is stored at program entry via STG (0x44) and references
+  ;; compile to LDG (0x43).
+  (let ((bytecode (secd-lisp:compile-string
+                   "(defvar +led-pin+ 25) (defun main () +led-pin+)")))
+    (is (bytecode-has bytecode #x44))                 ; STG
+    (is (bytecode-has bytecode #x43))))               ; LDG
+
+(test compile-defvar-setf-global
+  ;; (setf G v) on a defvar'd global emits STG (0x44); reads emit LDG (0x43).
+  (let ((bytecode (secd-lisp:compile-string
+                   "(defvar +x+ 1) (defun main () (setf +x+ 42) +x+)")))
+    (is (bytecode-has bytecode #x44))                 ; STG
+    (is (bytecode-has bytecode #x43))))               ; LDG
+
+(test compile-undefined-symbol-errors
+  ;; Reading an undefined symbol is a hard compile error (no more silent
+  ;; placeholder constants that read garbage at runtime).
+  (signals error
+    (secd-lisp:compile-string "(defun main () undefined-symbol")))
+
+(test compile-setf-undefined-errors
+  ;; setf on an undefined symbol is rejected: no implicit globals.
+  (signals error
+    (secd-lisp:compile-string "(defun main () (setf mystery 5))")))
+
+(test compile-setf-constant-errors
+  ;; setf on a defconstant is a compile-time error.
+  (signals error
+    (secd-lisp:compile-string
+     "(defconstant +c+ 10) (defun main () (setf +c+ 5))")))

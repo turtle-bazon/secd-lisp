@@ -97,12 +97,14 @@ library search path."
     (unless input-file
       (print-usage *error-output*)
       (clingon:exit 1))
-    (let* ((output-file (or (clingon:getopt cmd :output-file)
-                            (format nil "~A.uf2"
-                                    (pathname-name (pathname input-file)))))
-           (target-name (intern (string-upcase (or (clingon:getopt cmd :target)
+    (let* ((target-name (intern (string-upcase (or (clingon:getopt cmd :target)
                                                    "RP2040"))
                                 "KEYWORD"))
+           (esp32-target (search "ESP32" (symbol-name target-name)))
+           (output-file (or (clingon:getopt cmd :output-file)
+                            (format nil "~A.~A"
+                                    (pathname-name (pathname input-file))
+                                    (if esp32-target "bin" "uf2"))))
            (entry-fn (or (clingon:getopt cmd :entry) "SECD:MAIN")))
       (handler-case
           (progn
@@ -122,7 +124,13 @@ library search path."
               (format t "Merging with firmware: ~A~%"
                       (target-firmware-path *target*))
               (link-machine (target-firmware-path *target*) bytecode output-file)
-              (format t "Compiled successfully to ~A~%" output-file)))
+              (format t "Compiled successfully to ~A~%" output-file)
+              (when esp32-target
+                (format t "~%Flash (bootloader 0x1000, ptable 0x8000, app+bytecode 0x10000):~%")
+                (format t "  esptool.py write_flash 0x1000 bootloader.bin 0x8000 partition-table.bin 0x10000 ~A~%"
+                        output-file)
+                (format t "Or re-link a newer program without touching the firmware:~%")
+                (format t "  cat firmware.bin <name>.secd > final.bin~%"))))
         (error (e)
           (format t "Error: ~A~%" e)
           (clingon:exit 1)))))

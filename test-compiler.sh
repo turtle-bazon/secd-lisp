@@ -23,7 +23,7 @@ sbcl --non-interactive \
      --eval '(asdf:load-system :secd-lisp)' \
      --eval '(format t "Lexer test: ~A~%" (length (secd-lisp:tokenize "(+ 1 2)")))' \
      --eval '(format t "Parser test: ~A~%" (secd-lisp:ast-node-type (secd-lisp:parse (secd-lisp:tokenize "(+ 1 2)"))))' \
-     --eval '(format t "Compiler test: ~A bytes~%" (length (secd-lisp:compile-string "(+ 1 2)")))'
+     --eval '(format t "Compiler test: ~A bytes~%" (length (secd-lisp:compile-string "(defun main () (+ 1 2))")))'
 
 echo ""
 echo "All tests passed!"

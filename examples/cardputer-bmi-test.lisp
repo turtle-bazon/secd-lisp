@@ -1,35 +1,3 @@
-;;;;; cardputer-input.lisp -- Cardputer-ADV keyboard + IMU to USB HID.
-;;;;
-;;;; Copyright (C) 2026
-;;;; License: GPL3
-;;;;
-;;;; Hardware: M5Stack Cardputer-ADV (ESP32-S3). Everything hangs off the
-;;;; internal I2C bus (SDA=8, SCL=9, 400 kHz):
-;;;;   - TCA8418 keypad controller at 0x34 (the physical keyboard)
-;;;;   - BMI270 6-axis IMU at 0x68
-;;;; USB is brought up from Lisp as a composite HID device: keyboard+mouse.
-;;;;
-;;;; The TCA8418 is polled through its event FIFO, so no interrupt pin is
-;;;; needed: KEY_LCK_EC holds a count of pending key events, and each
-;;;; KEY_EVENT_A read pops one. A press event (bit7 set) carries a key
-;;;; number 1..80, remapped here to the Cardputer's 4x14 layout, then to a
-;;;; HID usage via the keymap + asciimap tables below (parsed straight from
-;;;; the M5Cardputer library so they stay byte-exact). Held ctrl/shift/alt
-;;;; bits ride along as the HID modifier byte, so shift+1 types '!'. The FN
-;;;; key layers to F-keys, arrows, ESC and DEL. Special keys (backspace,
-;;;; tab, enter) are HID usages already and pass through directly.
-;;;;
-;;;; The BMI270 will not run until a 8192-byte Bosch blob is uploaded to it
-;;;; (same procedure as examples/stamp-s3a-imu.lisp); its gyro X/Y rate is
-;;;; scaled into relative mouse deltas, so rotating the board moves the
-;;;; cursor. The stamp-s3a-imu.lisp file documents the byte-vector trick:
-;;;; the register byte 0x5E rides as element 0 of the literal.
-;;;;
-;;;; Build with:
-;;;;   (secd-lisp:secd-compile-file "examples/cardputer-input.lisp"
-;;;;                                :target :stamp-s3a
-;;;;                                :entry "CARDPUTER-INPUT:MAIN")
-
 (defpackage :cardputer-input)
 
 ;;; Internal I2C bus (Cardputer-ADV): SDA=8, SCL=9, 400 kHz.
@@ -783,50 +751,24 @@
           (kbd-scan mods fn))
         nil)))
 
-;;; --- main ----------------------------------------------------------
 
-;; Print MARKER N times with a 50ms gap. The CDC console drops TX until the
-;; host opens the port (DTR) and USB re-enumerates after %usb-start, so a
-;; single print is easily lost; repeating a few times makes it land.
-(defun marker (n count)
-  (if (= count 0)
-      nil
-      (progn
-        (print n)
-        (%sleep 50)
-        (marker n (- count 1)))))
-
+;;; --- diagnostic main --------------------------------------------------
 (defun main ()
-  (marker 100 10)                 ; alive: entered main
   (%usb-init)
-  (marker 200 10)                 ; after usb init
-  (%usb-hid-add)                  ; HID keyboard interface
-  (marker 300 10)                 ; after hid add
-  (%usb-mouse-add)                ; HID mouse interface
-  (marker 400 10)                 ; after mouse add
-  (%usb-start)                    ; freeze + enumerate
-  (marker 000 10)                 ; after usb start
-  (print (%i2c-init +i2c-sda+ +i2c-scl+ +i2c-khz+))
-  (marker 111 10)                 ; after i2c init
-  (kbd-init)
-  (marker 222 10)                 ; after kbd init
+  (%usb-start)
+  (%i2c-init 8 9 400)
   (bmi-init)
-  (marker 333 10)                 ; after bmi init
-  (let ((mods (make-vector 1))    ; held Ctrl/Shift/Alt bits
-        (fn (make-vector 1))      ; FN-layer flag
-        (tick 0))                 ; heartbeat counter
-    (loop
-      (kbd-scan mods fn)
-      (if (= 0 (mod tick 100))
-          (print tick)
-          nil)
-      (setf tick (+ tick 1))
-      ;; Roll -> pointer X, pitch -> pointer Y (see stamp-s3a-imu.lisp).
-      (%hid-mouse 0 (word-scale +reg-gyr-y-lsb+) (word-scale +reg-gyr-x-lsb+) 0)
-      (if (= 0 (mod tick 10))
-          (progn
-            (print (word-scale +reg-gyr-y-lsb+))
-            (print (word-scale +reg-gyr-x-lsb+)))
-          nil)
-      (%sleep 10))))
-
+  (loop
+    (print 500)
+    (print (vref (reg-read +imu-addr+ +reg-chip-id+ 1) 0))
+    (print 501)
+    (print (vref (reg-read +imu-addr+ +reg-internal-status+ 1) 0))
+    (print 620)
+    (print (word-scale +reg-acc-x-lsb+))
+    (print 630)
+    (print (word-scale 14))
+    (print 600)
+    (print (word-scale +reg-gyr-y-lsb+))
+    (print 610)
+    (print (word-scale +reg-gyr-x-lsb+))
+    (%sleep 50)))
