@@ -19,18 +19,18 @@
 ;;;; key layers to F-keys, arrows, ESC and DEL. Special keys (backspace,
 ;;;; tab, enter) are HID usages already and pass through directly.
 ;;;;
-;;;; The BMI270 will not run until a 8192-byte Bosch blob is uploaded to it
-;;;; (same procedure as examples/stamp-s3a-imu.lisp); its gyro X/Y rate is
-;;;; scaled into relative mouse deltas, so rotating the board moves the
-;;;; cursor. The stamp-s3a-imu.lisp file documents the byte-vector trick:
-;;;; the register byte 0x5E rides as element 0 of the literal.
+;;;; The BMI270 will not run until a 8192-byte Bosch blob is uploaded to it;
+;;;; its gyro X/Y rate is scaled into relative mouse deltas, so rotating the
+;;;; board moves the cursor. The byte-vector trick: the register byte 0x5E
+;;;; rides as element 0 of the literal.
 ;;;;
 ;;;; Build with:
 ;;;;   (secd-lisp:secd-compile-file "examples/cardputer-input.lisp"
 ;;;;                                :target :stamp-s3a
 ;;;;                                :entry "CARDPUTER-INPUT:MAIN")
 
-(defpackage :cardputer-input)
+(defpackage :cardputer-input
+  (:require (:core :refer :all)))
 
 ;;; Internal I2C bus (Cardputer-ADV): SDA=8, SCL=9, 400 kHz.
 (defconstant +i2c-sda+ 8)
@@ -61,8 +61,8 @@
 (defconstant +kbd-gpio-int-stat-2+ 18)
 (defconstant +kbd-gpio-int-stat-3+ 19)
 
-;;; BMI270 IMU. The Cardputer-ADV's internal bus has it at 0x69 (the same
-;;; address as the working stamp-s3a-imu.lisp reference); 0x68 does not ACK.
+;;; BMI270 IMU. The Cardputer-ADV's internal bus has it at 0x69; 0x68 does
+;;; not ACK.
 (defconstant +imu-addr+ 105)        ; 0x69
 (defconstant +reg-chip-id+ 0)       ; 0x00  read-back must be 0x24
 (defconstant +reg-acc-x-lsb+ 12)    ; 0x0C
@@ -671,14 +671,12 @@
       (clamp-mouse (- (+ (/ b0 64) (* 4 b1))
                       (if (>= b1 128) 1024 0))))))
 
-;;; --- BMI270 bring-up (see stamp-s3a-imu.lisp) -----------------------
+;;; --- BMI270 bring-up ------------------------------------------------
 
 (defun bmi-init ()
   (reg-write +imu-addr+ +reg-cmd+ +cmd-soft-reset+)
   (%sleep 5)
   (poll-nonzero +reg-pwr-conf+ 32)
-  ;; The chip should answer 0x24 (36); print what we actually read.
-  (print (vref (reg-read +imu-addr+ +reg-chip-id+ 1) 0))
   (reg-write +imu-addr+ +reg-pwr-conf+ 0)
   (%i2c-write +imu-addr+ (list +reg-init-addr-0+ 0 0))
   (%i2c-write-v +imu-addr+ +bmi270-config+)
@@ -778,55 +776,33 @@
   (let ((count (mod (vref (reg-read +kbd-addr+ +kbd-count+ 1) 0) 16)))
     (if (> count 0)
         (progn
-          (print count)
           (kbd-event mods fn)
           (kbd-scan mods fn))
         nil)))
 
 ;;; --- main ----------------------------------------------------------
 
-;; Print MARKER N times with a 50ms gap. The CDC console drops TX until the
-;; host opens the port (DTR) and USB re-enumerates after %usb-start, so a
-;; single print is easily lost; repeating a few times makes it land.
-(defun marker (n count)
-  (if (= count 0)
-      nil
-      (progn
-        (print n)
-        (%sleep 50)
-        (marker n (- count 1)))))
-
 (defun main ()
-  (marker 100 10)                 ; alive: entered main
+  ;; USB device identity (strings encoded to UTF-16LE by to-c-string).
+  (%usb-vid 4660)                ; 0x1234
+  (%usb-pid 22136)               ; 0x5678
+  (%usb-manufacturer (to-c-string "M5Stack"))
+  (%usb-product (to-c-string "Cardputer"))
+  (%usb-serial (to-c-string "000000000001"))
   (%usb-init)
-  (marker 200 10)                 ; after usb init
   (%usb-hid-add)                  ; HID keyboard interface
-  (marker 300 10)                 ; after hid add
   (%usb-mouse-add)                ; HID mouse interface
-  (marker 400 10)                 ; after mouse add
   (%usb-start)                    ; freeze + enumerate
-  (marker 000 10)                 ; after usb start
-  (print (%i2c-init +i2c-sda+ +i2c-scl+ +i2c-khz+))
-  (marker 111 10)                 ; after i2c init
+  (%i2c-init +i2c-sda+ +i2c-scl+ +i2c-khz+)
   (kbd-init)
-  (marker 222 10)                 ; after kbd init
   (bmi-init)
-  (marker 333 10)                 ; after bmi init
   (let ((mods (make-vector 1))    ; held Ctrl/Shift/Alt bits
         (fn (make-vector 1))      ; FN-layer flag
-        (tick 0))                 ; heartbeat counter
+        (tick 0))                 ; loop counter
     (loop
       (kbd-scan mods fn)
-      (if (= 0 (mod tick 100))
-          (print tick)
-          nil)
       (setf tick (+ tick 1))
-      ;; Roll -> pointer X, pitch -> pointer Y (see stamp-s3a-imu.lisp).
+      ;; Roll -> pointer X, pitch -> pointer Y.
       (%hid-mouse 0 (word-scale +reg-gyr-y-lsb+) (word-scale +reg-gyr-x-lsb+) 0)
-      (if (= 0 (mod tick 10))
-          (progn
-            (print (word-scale +reg-gyr-y-lsb+))
-            (print (word-scale +reg-gyr-x-lsb+)))
-          nil)
       (%sleep 10))))
 

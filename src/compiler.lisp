@@ -19,6 +19,7 @@
   (lambdas nil :type list)  ; For nested lambda compilation
   (functions (make-hash-table :test 'eq) :type hash-table)  ; name -> function body address
   (primitives (make-hash-table :test 'eq) :type hash-table)  ; name -> primitive id
+  (prim-arities (make-hash-table :test 'eq) :type hash-table)  ; name -> declared arg count (def-c-fun)
   (scopes nil :type list)  ; lexical scopes: list of frames; each frame is a list of bound names (innermost frame first)
   (current-package "SECD" :type string)  ; package symbols resolve in
   (packages (make-hash-table :test 'equal) :type hash-table)  ; package name -> (required refers exports)
@@ -120,9 +121,33 @@
 (defun emit-bytevec-literal (context bytes)
   "Emit LDV for byte-vector literal BYTES and return its pool slot."
   (let ((slot (get-bytevec-slot context bytes)))
-    (emit-opcode context +op-ldv+)
-    (emit-u16 context slot)
-    slot))
+     (emit-opcode context +op-ldv+)
+     (emit-u16 context slot)
+     slot))
+
+;;; Encode a host string to a list of UTF-8 byte values (0..255).
+;;; Sources are assumed to be UTF-8, so we encode code points, not raw chars.
+(defun utf8-bytes (str)
+  "Encode STR (a Common Lisp string) to a list of UTF-8 byte values."
+  (let ((out '()))
+    (loop for ch across str
+          for cp = (char-code ch)
+          do (cond
+               ((< cp #x80)
+                (push cp out))
+               ((< cp #x800)
+                (push (logior #xC0 (ldb (byte 5 6) cp)) out)
+                (push (logior #x80 (logand #x3F cp)) out))
+               ((< cp #x10000)
+                (push (logior #xE0 (ldb (byte 4 12) cp)) out)
+                (push (logior #x80 (ldb (byte 6 6) cp)) out)
+                (push (logior #x80 (logand #x3F cp)) out))
+               (t
+                (push (logior #xF0 (ldb (byte 3 18) cp)) out)
+                (push (logior #x80 (ldb (byte 6 12) cp)) out)
+                (push (logior #x80 (ldb (byte 6 6) cp)) out)
+                (push (logior #x80 (logand #x3F cp)) out))))
+    (nreverse out)))
 
 ;;; Append the ROM byte-vector pool to the code buffer, after OP_STOP.
 ;;; Layout (big-endian), matching the C loader in bytecode.cpp:
@@ -522,10 +547,13 @@ raise a descriptive error."
                (usb-note))))))
 
 ;;; Compile the target (operator) of a function or primitive call.
-;;; Returns (values kind target) where kind is :func, :prim, or :lambda.
+;;; Returns (values kind target resolved) where kind is :func, :prim, or
+;;; :lambda.
 ;;;   :func  - user function, target = bytecode address (emit OP_CALL)
 ;;;   :prim  - primitive, target = primitive id (emit LDC then OP_APP)
 ;;;   :lambda - operator was an expression (closure already on stack, emit OP_APP)
+;;; RESOLVED is the canonical symbol for symbol operators (used for primitive
+;;; arity lookup); NIL for non-symbol operators.
 (defun compile-call-target (context operator)
   "Compile the function/primitive target of a call."
   (if (ast-symbol-p operator)
@@ -535,18 +563,18 @@ raise a descriptive error."
              (prim-id (gethash resolved (compilation-context-primitives context))))
         (cond
           (fn-addr
-           (values :func fn-addr))
+           (values :func fn-addr resolved))
           ((not (null prim-id))
-           (values :prim prim-id))
-          ((eq name 't) (compile-literal context t) (values :lambda nil))
-          ((eq name 'nil) (compile-literal context nil) (values :lambda nil))
+           (values :prim prim-id resolved))
+          ((eq name 't) (compile-literal context t) (values :lambda nil nil))
+          ((eq name 'nil) (compile-literal context nil) (values :lambda nil nil))
           (t
            (ensure-usb-class name)
            (error "Unknown function: ~A" name))))
       ;; Non-symbol operator (e.g. lambda expression): compile it
       (progn
         (compile-node context operator)
-        (values :lambda nil))))
+        (values :lambda nil nil))))
 
 ;;; Compile operands into an argument list on the stack:
 ;;; pushes a1 .. an then LDC nil + Nx CONS -> (a1 ... an) on top.
@@ -559,20 +587,48 @@ raise a descriptive error."
   (dotimes (i (length operands))
     (emit-opcode context +op-cons+)))
 
-;;; Populate the primitive table from a target's .machine metadata
+;;; Board-independent UNIVERSAL runtime primitive metadata.
+;;;
+;;; These ids (core VM ops 0-14 plus universal software primitives such as
+;;; utf16-enc/utf16-dec at 200/201) are identical in EVERY firmware image, so
+;;; a program compiled against them is portable across all targets. They live
+;;; in targets/machine-runtime.json, separate from the per-chip HAL metadata,
+;;; so that .machine / chip JSON stay HAL-only.
+(defvar *runtime-metadata-path*
+  (merge-pathnames #p"../targets/machine-runtime.json"
+                   (first *machine-search-paths*))
+  "Path to the board-independent universal runtime primitive metadata.")
+
+(defvar *runtime-primitives* nil
+  "Cached hash-table (name -> primitive def) loaded from
+  *runtime-metadata-path*. Lazily loaded by RUNTIME-PRIMITIVES.")
+
+(defun runtime-primitives ()
+  "Return the universal runtime primitive table, loading it on first use."
+  (unless *runtime-primitives*
+    (let ((path *runtime-metadata-path*))
+      (unless (probe-file path)
+        (error "Universal runtime metadata not found at ~A" path))
+      (setf *runtime-primitives*
+            (gethash "primitives"
+                     (yason:parse (uiop:read-file-string path))))))
+  *runtime-primitives*)
+
+;;; Populate the primitive table from (a) the universal runtime metadata and
+;;; (b) the target's HAL metadata.
 (defun load-target-primitives (context target-name)
-  "Load target primitive ids into the compilation context."
+  "Load primitive ids into the compilation context.
+
+Universal runtime primitives (ids 0-14 and the fixed high ids such as
+utf16-enc/utf16-dec = 200/201) come from machine-runtime.json and are
+identical on every target. Board-specific HAL primitives (ids >= 15) come
+from the target's .machine metadata (the per-chip JSON)."
   (let ((target (load-target target-name)))
-    ;; Core primitives are identical on every target (registered first by the
-    ;; firmware, ids 0-14). Target metadata may still override/add entries.
-    (let ((core '(("car" . 0) ("cdr" . 1) ("cons" . 2) ("list" . 3)
-                  ("+" . 4) ("-" . 5) ("*" . 6) ("/" . 7) ("%" . 8)
-                  ("=" . 9) ("<" . 10) (">" . 11)
-                  ("null?" . 12) ("pair?" . 13) ("atom?" . 14))))
-      (dolist (core-def core)
-        (setf (gethash (intern (string-upcase (car core-def)) "SECD-LISP")
-                       (compilation-context-primitives context))
-              (cdr core-def))))
+    (loop for prim-name being the hash-keys of (runtime-primitives)
+            using (hash-value prim-def)
+          do (setf (gethash (intern (string-upcase prim-name) "SECD-LISP")
+                            (compilation-context-primitives context))
+                   (gethash "id" prim-def)))
     (loop for prim-name being the hash-keys of (target-primitives target)
             using (hash-value prim-def)
           do (setf (gethash (intern (string-upcase prim-name) "SECD-LISP")
@@ -716,15 +772,17 @@ raise a descriptive error."
        (compile-require-directive context form visited))
       ((load-path form)
        (compile-load-directive context form visited))
-      ((eq (ast-node-type form) :defun)
-       (compile-node context form))
-      ((eq (ast-node-type form) :defconstant)
-       (compile-defconstant context form))
-      ((eq (ast-node-type form) :defvar)
-       (compile-defvar context form))
-      (t
-       (error "Unexpected top-level form (~A); only defun, defpackage, in-package, require, load, defconstant and defvar are allowed"
-              (ast-node-type form))))))
+       ((eq (ast-node-type form) :defun)
+        (compile-node context form))
+       ((eq (ast-node-type form) :def-c-fun)
+        (compile-node context form))
+       ((eq (ast-node-type form) :defconstant)
+        (compile-defconstant context form))
+       ((eq (ast-node-type form) :defvar)
+        (compile-defvar context form))
+       (t
+        (error "Unexpected top-level form (~A); only defun, def-c-fun, defpackage, in-package, require, load, defconstant and defvar are allowed"
+               (ast-node-type form))))))
 
 ;;; Compile an AST node
 (defun compile-node (context node)
@@ -772,6 +830,11 @@ raise a descriptive error."
     ;; Byte-vector literal #( ... )
     (:byte-vector
      (emit-bytevec-literal context (ast-node-value node)))
+
+    ;; String literal "..." — emitted as a UTF-8 byte-vector (a sequence of
+    ;; bytes; vref/length operate at byte level, ASCII == character level).
+    (:string
+     (emit-bytevec-literal context (utf8-bytes (ast-node-value node))))
     
     ;; Boolean literal
     (:boolean
@@ -836,19 +899,24 @@ raise a descriptive error."
              (dolist (operand operands)
                (compile-node context operand))
              (compile-node context operator))
-           ;; Function/primitive/lambda call
-           (multiple-value-bind (kind target)
-               (compile-call-target context operator)
-             (when (eq kind :prim)
-               (emit-opcode context +op-ldc+)
-               (emit-u16 context target))
-             (compile-args-list context operands)
-             (case kind
-               (:func
-                (emit-opcode context +op-call+)
+;; Function/primitive/lambda call
+            (multiple-value-bind (kind target resolved)
+                (compile-call-target context operator)
+              (when (eq kind :prim)
+                (let ((arity (and resolved
+                                  (gethash resolved (compilation-context-prim-arities context)))))
+                  (when (and arity (/= arity (length operands)))
+                    (error "~A expects ~D argument~:P, but got ~D"
+                           resolved arity (length operands))))
+                (emit-opcode context +op-ldc+)
                 (emit-u16 context target))
-               (t
-                (emit-opcode context +op-app+)))))))
+              (compile-args-list context operands)
+              (case kind
+                (:func
+                 (emit-opcode context +op-call+)
+                 (emit-u16 context target))
+                (t
+                 (emit-opcode context +op-app+)))))))
     
     ;; Lambda
     (:lambda
@@ -892,11 +960,42 @@ raise a descriptive error."
             (body (ast-node-children node))
             ;; LDF opcode + 2 operand bytes precede the function body
             (body-start (+ (length (compilation-context-code context)) 3)))
-       ;; Register the name before compiling the body so a function can
-       ;; recurse on itself.
-       (setf (gethash name (compilation-context-functions context)) body-start)
-       ;; Compile as lambda
-       (compile-node context (make-lambda-node params body))))
+        ;; Register the name before compiling the body so a function can
+        ;; recurse on itself.
+        (setf (gethash name (compilation-context-functions context)) body-start)
+        ;; Compile as lambda
+        (compile-node context (make-lambda-node params body))))
+
+     ;; Def-c-fun: bind LISP-NAME to an existing C function C-FUN-NAME as a
+     ;; primitive alias. Emits no code; registers the alias in the primitive
+     ;; table (both unqualified and package-qualified) so it is callable bare
+     ;; or via a :refer rule. Only non-HAL (software) C functions are allowed.
+     (:def-c-fun
+      (let* ((value (ast-node-value node))
+             (lisp-name (first value))
+             (c-fun-name (second value))
+             (params (third value))
+             (c-fun-sym (intern (string-upcase (symbol-name c-fun-name)) "SECD-LISP"))
+             (id (gethash c-fun-sym (compilation-context-primitives context))))
+        (when (and (> (length (symbol-name c-fun-name)) 0)
+                   (char= (char (symbol-name c-fun-name) 0) #\%))
+          (error "def-c-fun cannot bind to HAL primitive ~A; call the %-primitive directly"
+                 c-fun-name))
+        (unless id
+          (error "def-c-fun: unknown C function ~A (not present in the target's runtime)"
+                 c-fun-name))
+        (let ((arity (length params))
+              (unq (intern (string-upcase (symbol-name lisp-name)) "SECD-LISP"))
+              (qual (intern (concatenate 'string
+                                         (compilation-context-current-package context)
+                                         ":" (string-upcase (symbol-name lisp-name)))
+                            "SECD-LISP")))
+          (setf (gethash unq (compilation-context-primitives context)) id)
+          (setf (gethash qual (compilation-context-primitives context)) id)
+          (setf (gethash unq (compilation-context-prim-arities context)) arity)
+          (setf (gethash qual (compilation-context-prim-arities context)) arity)))
+      (values))
+
     
     ;; If
     (:if

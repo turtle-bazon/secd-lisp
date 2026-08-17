@@ -3,8 +3,7 @@
 ;;;; Copyright (C) 2026
 ;;;; License: GPL3
 ;;;;
-;;;; Blinks board LED pin 8 a fixed number of times; prints the remaining
-;;;; count each iteration as numeric console output (USB-Serial/JTAG console).
+;;;; Blinks board LED pin 8 a fixed number of times.
 
 (defun led-init ()
   (%gpio-init 8 :output))
@@ -19,7 +18,6 @@
   (if (> times 0)
       (progn
         (led-on)
-        (print times)
         (%sleep delay)
         (led-off)
         (%sleep delay)

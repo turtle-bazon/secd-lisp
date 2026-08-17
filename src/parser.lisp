@@ -163,7 +163,7 @@
 ;;; Special form names (compared by symbol-name string)
 (defparameter *special-form-names*
   '("DEFUN" "LAMBDA" "IF" "WHEN" "UNLESS" "COND" "LET" "LET*"
-    "PROGN" "SETF" "SET!" "LOOP" "DEFVAR" "DEFCONSTANT" "QUOTE"))
+    "PROGN" "SETF" "SET!" "LOOP" "DEFVAR" "DEFCONSTANT" "QUOTE" "DEF-C-FUN"))
 
 (defun special-form-name-p (name)
   "Check if a symbol name is a special form."
@@ -298,9 +298,19 @@
        (make-defconstant-node (ast-node-value (first args)) (second args)
                               :line line :column col))
       ((string= sname "QUOTE")
-       (make-quote-node (first args) :line line :column col))
+        (make-quote-node (first args) :line line :column col))
+      ((string= sname "DEF-C-FUN")
+       ;; (def-c-fun (lisp-name c-fun-name) (params)) — bind LISP-NAME to the
+       ;; C function C-FUN-NAME as a primitive alias (no Lisp body).
+       (let ((pair (first args))
+             (params (second args)))
+         (make-ast-node :type :def-c-fun
+                        :value (list (ast-node-value (ast-node-value pair))
+                                     (ast-node-value (first (ast-node-children pair)))
+                                     (parse-param-list params))
+                        :line line :column col)))
       (t
-       (error "Unknown special form: ~A" name)))))
+        (error "Unknown special form: ~A" name)))))
 
 ;;; Parse a list
 (defun parse-list (parser)
