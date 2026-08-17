@@ -24,6 +24,40 @@
     (is (eq (secd-lisp:token-type (first tokens)) :integer))
     (is (= (secd-lisp:token-value (first tokens)) 42))))
 
+(test tokenize-hex-integer
+  (let ((tokens (secd-lisp:tokenize "0xFF")))
+    (is (= (length tokens) 2)) ; integer + eof
+    (is (eq (secd-lisp:token-type (first tokens)) :integer))
+    (is (= (secd-lisp:token-value (first tokens)) 255))))
+
+(test tokenize-hex-integer-lowercase
+  (let ((tokens (secd-lisp:tokenize "0x5e")))
+    (is (= (length tokens) 2))
+    (is (eq (secd-lisp:token-type (first tokens)) :integer))
+    (is (= (secd-lisp:token-value (first tokens)) 94))))
+
+(test tokenize-binary-integer
+  (let ((tokens (secd-lisp:tokenize "0b1010")))
+    (is (= (length tokens) 2))
+    (is (eq (secd-lisp:token-type (first tokens)) :integer))
+    (is (= (secd-lisp:token-value (first tokens)) 10))))
+
+(test tokenize-negative-hex-integer
+  (let ((tokens (secd-lisp:tokenize "-0x1F")))
+    (is (= (length tokens) 2))
+    (is (eq (secd-lisp:token-type (first tokens)) :integer))
+    (is (= (secd-lisp:token-value (first tokens)) -31))))
+
+(test tokenize-hex-in-byte-vector
+  (let ((tokens (secd-lisp:tokenize "#(0x00 0x5E 0xFF 0b0001)")))
+    (is (= (length tokens) 2)) ; byte-vector + eof
+    (is (eq (secd-lisp:token-type (first tokens)) :byte-vector))
+    (is (equal (secd-lisp:token-value (first tokens)) '(0 94 255 1)))))
+
+(test tokenize-hex-byte-vector-out-of-range
+  (signals error
+    (secd-lisp:tokenize "#(0x100 0x00)")))
+
 (test tokenize-string
   (let ((tokens (secd-lisp:tokenize "\"hello\"")))
     (is (= (length tokens) 2)) ; string + eof

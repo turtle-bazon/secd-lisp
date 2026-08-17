@@ -103,27 +103,55 @@
           (make-token :keyword (intern (subseq value 1) "KEYWORD") start-line start-col)
           (make-token :symbol (intern (string-upcase value) "SECD-LISP") start-line start-col)))))
 
-;;; Read a number
+;;; Read a number. Supports decimal integers and floats, plus hex (0x..)
+;;; and binary (0b..) integer literals.
 (defun lexer-read-number (lexer)
   "Read a number from the input."
-  (let ((start (lexer-position lexer))
-        (start-line (lexer-line lexer))
+  (let ((start-line (lexer-line lexer))
         (start-col (lexer-column lexer))
-        (has-dot nil))
+        (negative nil)
+        (radix 10))
     ;; Consume an optional leading minus so negative literals work
     (when (and (eql (lexer-peek lexer) #\-)
                (digit-char-p (lexer-peek lexer 1)))
+      (setq negative t)
       (lexer-advance lexer))
-    ;; Read digits and optional dot
-    (loop while (< (lexer-position lexer) (length (lexer-input lexer)))
-          for ch = (lexer-peek lexer)
-          while (or (digit-char-p ch)
-                    (and (eql ch #\.) (not has-dot) (setq has-dot t)))
-          do (lexer-advance lexer))
-    (let ((value (subseq (lexer-input lexer) start (lexer-position lexer))))
-      (if has-dot
-          (make-token :float (read-from-string value) start-line start-col)
-          (make-token :integer (parse-integer value) start-line start-col)))))
+    ;; Radix prefix: 0x/0X for hex, 0b/0B for binary
+    (cond
+      ((and (eql (lexer-peek lexer) #\0)
+            (member (lexer-peek lexer 1) '(#\x #\X)))
+       (setq radix 16)
+       (lexer-advance lexer)
+       (lexer-advance lexer))
+      ((and (eql (lexer-peek lexer) #\0)
+            (member (lexer-peek lexer 1) '(#\b #\B)))
+       (setq radix 2)
+       (lexer-advance lexer)
+       (lexer-advance lexer)))
+    ;; Read digits (plus an optional dot, decimal only)
+    (let ((has-dot nil)
+          (num-start (lexer-position lexer)))
+      (loop while (< (lexer-position lexer) (length (lexer-input lexer)))
+            for ch = (lexer-peek lexer)
+            while (if (= radix 10)
+                      (or (digit-char-p ch)
+                          (and (eql ch #\.) (not has-dot) (setq has-dot t)))
+                      (digit-char-p ch radix))
+            do (lexer-advance lexer))
+      (let ((value (subseq (lexer-input lexer) num-start (lexer-position lexer))))
+        (when (zerop (length value))
+          (error "Malformed number literal"))
+        (if (= radix 10)
+            (if has-dot
+                (make-token :float (read-from-string
+                                     (if negative (concatenate 'string "-" value) value))
+                            start-line start-col)
+                (make-token :integer (parse-integer
+                                      (if negative (concatenate 'string "-" value) value))
+                            start-line start-col))
+            (let ((n (parse-integer value :radix radix)))
+              (make-token :integer (if negative (- n) n)
+                          start-line start-col)))))))
 
 ;;; Read a string
 (defun lexer-read-string (lexer)
