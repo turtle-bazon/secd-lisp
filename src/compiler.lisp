@@ -953,16 +953,26 @@ from the target's .machine metadata (the per-chip JSON)."
                  (logand (+ addr-pos 2) #xff))))))
     
     ;; Defun
-    (:defun
-     (let* ((name-and-params (ast-node-value node))
-            (name (canonical-sym context (car name-and-params)))
-            (params (second name-and-params))
-            (body (ast-node-children node))
-            ;; LDF opcode + 2 operand bytes precede the function body
-            (body-start (+ (length (compilation-context-code context)) 3)))
+     (:defun
+      (let* ((name-and-params (ast-node-value node))
+             (name (canonical-sym context (car name-and-params)))
+             (params (second name-and-params))
+             (body (ast-node-children node))
+             ;; LDF opcode + 2 operand bytes precede the function body
+             (body-start (+ (length (compilation-context-code context)) 3)))
         ;; Register the name before compiling the body so a function can
         ;; recurse on itself.
         (setf (gethash name (compilation-context-functions context)) body-start)
+        ;; Also register under the current package's qualified name so the
+        ;; function is reachable as PKG:NAME even when NAME collides with a
+        ;; CL/global symbol (e.g. (defun count ...) canonicalizes to
+        ;; CL:COUNT; the qualified form is what a library user references).
+        (let ((qname (intern (concatenate 'string
+                                          (compilation-context-current-package context)
+                                          ":" (symbol-name (car name-and-params)))
+                             "SECD-LISP")))
+          (unless (eq qname name)
+            (setf (gethash qname (compilation-context-functions context)) body-start)))
         ;; Compile as lambda
         (compile-node context (make-lambda-node params body))))
 

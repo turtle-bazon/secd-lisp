@@ -4,7 +4,7 @@
 ;;;; License: GPL3
 ;;;;
 ;;;; Repeating colour blink pattern on the board's on-board NeoPixel using
-;;;; the reusable WS2812 driver from library/ws2812.lisp.
+;;;; the reusable WS2812 LED driver from library/led/ws2812.lisp.
 ;;;;
 ;;;; Pattern (repeats forever):
 ;;;;   Red    on 250 ms, off 250 ms,
@@ -16,12 +16,12 @@
 ;;;; (pin 8 on the ESP32-C3 SuperMini).
 ;;;;
 ;;;; Package demo: the program declares its own package :rgb-blink;
-;;;; (:require (:ws2812 :refer :all)) pulls in the WS2812 driver and
+;;;; (:require (:led/ws2812 :refer :all)) pulls in the WS2812 driver and
 ;;;; imports every name it exports (rgb-show, rgb-off) unqualified. The
 ;;;; entry point is chosen at build time with :entry "rgb-blink:main".
 
 (defpackage :rgb-blink
-  (:require (:ws2812 :refer :all)))
+  (:require (:led/ws2812 :refer :all)))
 
 ;; The on-board NeoPixel pin.
 (defconstant +led-pin+ 16)

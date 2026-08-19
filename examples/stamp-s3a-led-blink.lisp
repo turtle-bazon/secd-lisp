@@ -14,7 +14,7 @@
 ;;;;                                :target :stamp-s3a :entry "led-blink:main")
 
 (defpackage :led-blink
-  (:require (:ws2812 :refer :all)))
+  (:require (:led/ws2812 :refer :all)))
 
 (defconstant +led-pin+ 21)  ; Stamp-S3A on-board WS2812 (per targets/boards)
 
