@@ -9,18 +9,20 @@
 ;;;; pin required: KEY_LCK_EC holds a count of pending events and each
 ;;;; KEY_EVENT_A read pops one.
 ;;;;
-;;;; Every function takes the device address as a parameter:
-;;;;   (init addr)        bring-up: GPIOs input, key-event mode, matrix(7,8),
-;;;;                      drain + clear status
-;;;;   (count addr)       pending event count (0..15)
-;;;;   (event addr)       pop one raw event byte (0x00 when empty)
-;;;;   (event-press ev)   T if EV is a press event (bit7 set)
-;;;;   (event-key ev)     key number 0..79 from EV (-1 when none)
+;;;; Every function takes the I2C bus index (returned by %i2c-init) and the
+;;;; device address as parameters:
+;;;;   (init bus addr)     bring-up: GPIOs input, key-event mode, matrix(7,8),
+;;;;                       drain + clear status
+;;;;   (count bus addr)    pending event count (0..15)
+;;;;   (event bus addr)    pop one raw event byte (0x00 when empty)
+;;;;   (event-press ev)    T if EV is a press event (bit7 set)
+;;;;   (event-key ev)      key number 0..79 from EV (-1 when none)
 ;;;;
 ;;;; Use from a program with:
 ;;;;   (defpackage :my-program
 ;;;;     (:require (:keypad/tca8418)))
-;;;;   (tca8418:init 0x34)
+;;;;   (defvar *i2c* (%i2c-init 8 9 400))   ; bus 0 (or 1) once initialized
+;;;;   (tca8418:init *i2c* 0x34)
 
 (defpackage "TCA8418"
   (:export INIT COUNT EVENT EVENT-PRESS EVENT-KEY))
@@ -48,49 +50,49 @@
 (defconstant +gpio-int-stat-2+ 0x12)
 (defconstant +gpio-int-stat-3+ 0x13)
 
-;; Write a single byte to register REG at device ADDR.
-(defun reg-write (addr reg value)
-  (%i2c-write addr (list reg value)))
+;; Write a single byte to register REG at device ADDR on bus BUS.
+(defun reg-write (bus addr reg value)
+  (%i2c-write bus addr (list reg value)))
 
-;; Read N bytes starting at register REG from device ADDR.
-(defun reg-read (addr reg n)
-  (%i2c-write-read addr (list reg) n))
+;; Read N bytes starting at register REG from device ADDR on bus BUS.
+(defun reg-read (bus addr reg n)
+  (%i2c-write-read bus addr (list reg) n))
 
 ;; Drain the key-event FIFO (KEY_EVENT_A reads 0 once empty).
-(defun drain (addr)
-  (if (= (vref (reg-read addr +event+ 1) 0) 0)
+(defun drain (bus addr)
+  (if (= (vref (reg-read bus addr +event+ 1) 0) 0)
       t
-      (drain addr)))
+      (drain bus addr)))
 
 ;; Begin/flush, mirroring Adafruit_TCA8418::begin + matrix(7,8) + flush.
-(defun init (addr)
-  (reg-write addr +dir-1+ 0)          ; all GPIOs input
-  (reg-write addr +dir-2+ 0)
-  (reg-write addr +dir-3+ 0)
-  (reg-write addr +gpi-em-1+ 255)     ; key-event mode
-  (reg-write addr +gpi-em-2+ 255)
-  (reg-write addr +gpi-em-3+ 255)
-  (reg-write addr +int-lvl-1+ 0)      ; falling edge
-  (reg-write addr +int-lvl-2+ 0)
-  (reg-write addr +int-lvl-3+ 0)
-  (reg-write addr +int-en-1+ 255)     ; interrupt-enabled
-  (reg-write addr +int-en-2+ 255)
-  (reg-write addr +int-en-3+ 255)
-  (reg-write addr +kp-gpio-1+ 127)    ; matrix(7,8): 7 rows
-  (reg-write addr +kp-gpio-2+ 255)    ; + 8 columns
-  (drain addr)                        ; flush
-  (reg-read addr +gpio-int-stat-1+ 1)
-  (reg-read addr +gpio-int-stat-2+ 1)
-  (reg-read addr +gpio-int-stat-3+ 1)
-  (reg-write addr +int-stat+ 3))
+(defun init (bus addr)
+  (reg-write bus addr +dir-1+ 0)     ; all GPIOs input
+  (reg-write bus addr +dir-2+ 0)
+  (reg-write bus addr +dir-3+ 0)
+  (reg-write bus addr +gpi-em-1+ 255) ; key-event mode
+  (reg-write bus addr +gpi-em-2+ 255)
+  (reg-write bus addr +gpi-em-3+ 255)
+  (reg-write bus addr +int-lvl-1+ 0) ; falling edge
+  (reg-write bus addr +int-lvl-2+ 0)
+  (reg-write bus addr +int-lvl-3+ 0)
+  (reg-write bus addr +int-en-1+ 255) ; interrupt-enabled
+  (reg-write bus addr +int-en-2+ 255)
+  (reg-write bus addr +int-en-3+ 255)
+  (reg-write bus addr +kp-gpio-1+ 127) ; matrix(7,8): 7 rows
+  (reg-write bus addr +kp-gpio-2+ 255) ; + 8 columns
+  (drain bus addr)                   ; flush
+  (reg-read bus addr +gpio-int-stat-1+ 1)
+  (reg-read bus addr +gpio-int-stat-2+ 1)
+  (reg-read bus addr +gpio-int-stat-3+ 1)
+  (reg-write bus addr +int-stat+ 3))
 
 ;; Pending key-event count (KEY_LCK_EC low 4 bits = FIFO depth).
-(defun count (addr)
-  (mod (vref (reg-read addr +count+ 1) 0) 16))
+(defun count (bus addr)
+  (mod (vref (reg-read bus addr +count+ 1) 0) 16))
 
 ;; Pop one raw key event byte (0x00 when the FIFO is empty).
-(defun event (addr)
-  (vref (reg-read addr +event+ 1) 0))
+(defun event (bus addr)
+  (vref (reg-read bus addr +event+ 1) 0))
 
 ;; T if EV is a press event (bit7 set = press, clear = release).
 (defun event-press (ev)

@@ -8,15 +8,17 @@
 ;;;; of the byte-vector so a single upload programs the config engine. The
 ;;;; driver then powers on the acc + gyr axes.
 ;;;;
-;;;; Every function takes the device address as a parameter:
-;;;;   (init addr)      soft-reset, upload the config blob, enable acc+gyr
-;;;;   (word-scale addr reg) signed 16-bit sensor word at REG folded into the
-;;;;                    int8 range %hid-mouse accepts (no shifts)
+;;;; Every function takes the I2C bus index (returned by %i2c-init) and the
+;;;; device address as parameters:
+;;;;   (init bus addr)      soft-reset, upload the config blob, enable acc+gyr
+;;;;   (word-scale bus addr reg) signed 16-bit sensor word at REG folded into
+;;;;                    the int8 range %hid-mouse accepts (no shifts)
 ;;;;
 ;;;; Use from a program with:
 ;;;;   (defpackage :my-program
 ;;;;     (:require (:imu/bmi270)))
-;;;;   (bmi270:init 0x69)
+;;;;   (defvar *i2c* (%i2c-init 8 9 400))
+;;;;   (bmi270:init *i2c* 0x69)
 
 (defpackage "BMI270"
   (:export INIT WORD-SCALE +GYR-X-LSB+ +GYR-Y-LSB+))
@@ -553,37 +555,37 @@
   0xC1 0x80 0x2E 0x00 0xC1 0x80 0x2E 0x00 0xC1 0x80 0x2E 0x00 0xC1 0x80 0x2E 0x00
   0xC1))
 
-;; Write a single byte to register REG at device ADDR.
-(defun reg-write (addr reg value)
-  (%i2c-write addr (list reg value)))
+;; Write a single byte to register REG at device ADDR on bus BUS.
+(defun reg-write (bus addr reg value)
+  (%i2c-write bus addr (list reg value)))
 
-;; Read N bytes starting at register REG from device ADDR.
-(defun reg-read (addr reg n)
-  (%i2c-write-read addr (list reg) n))
+;; Read N bytes starting at register REG from device ADDR on bus BUS.
+(defun reg-read (bus addr reg n)
+  (%i2c-write-read bus addr (list reg) n))
 
 ;; Poll register REG until it reads non-zero (bounded busy-wait).
-(defun poll-nonzero (addr reg steps)
+(defun poll-nonzero (bus addr reg steps)
   (if (= steps 0)
       t
-      (if (not (= (vref (reg-read addr reg 1) 0) 0))
+      (if (not (= (vref (reg-read bus addr reg 1) 0) 0))
           t
-          (poll-nonzero addr reg (- steps 1)))))
+          (poll-nonzero bus addr reg (- steps 1)))))
 
 ;; Bring up the BMI270: soft reset, wait for power config, upload the Bosch
 ;; config blob, start the config engine, then enable ACC + GYR. Without the
 ;; PWR_CTRL write the data registers stay at 0 even though the config engine
 ;; is running.
-(defun init (addr)
-  (reg-write addr +cmd+ +cmd-soft-reset+)
+(defun init (bus addr)
+  (reg-write bus addr +cmd+ +cmd-soft-reset+)
   (%sleep 5)
-  (poll-nonzero addr +pwr-conf+ 32)
-  (reg-write addr +pwr-conf+ 0)
-  (%i2c-write addr (list +init-addr-0+ 0 0))
-  (%i2c-write-v addr +config+)
-  (reg-write addr +init-ctrl+ 1)
-  (reg-write addr +int-map-data+ 255)
-  (poll-nonzero addr +internal-status+ 32)
-  (reg-write addr +pwr-ctrl+ 3))      ; 0x03 = acc_en | gyr_en
+  (poll-nonzero bus addr +pwr-conf+ 32)
+  (reg-write bus addr +pwr-conf+ 0)
+  (%i2c-write bus addr (list +init-addr-0+ 0 0))
+  (%i2c-write-v bus addr +config+)
+  (reg-write bus addr +init-ctrl+ 1)
+  (reg-write bus addr +int-map-data+ 255)
+  (poll-nonzero bus addr +internal-status+ 32)
+  (reg-write bus addr +pwr-ctrl+ 3))  ; 0x03 = acc_en | gyr_en
 
 ;; Clamp a fixnum to the signed int8 range %hid-mouse accepts.
 (defun clamp (v)
@@ -594,8 +596,8 @@
 ;; Signed 16-bit sensor word at REG, folded into the 12-bit fixnum range
 ;; and scaled by 1/64: r/64 = b0/64 + 4*b1, minus 1024 when the high byte
 ;; >= 128 (negative), then clamped to the mouse's int8 range. No shifts.
-(defun word-scale (addr reg)
-  (let ((v (reg-read addr reg 2)))
+(defun word-scale (bus addr reg)
+  (let ((v (reg-read bus addr reg 2)))
     (let ((b0 (vref v 0))
           (b1 (vref v 1)))
       (clamp (- (+ (/ b0 64) (* 4 b1))

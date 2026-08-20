@@ -26,6 +26,8 @@
 ;;;;
 ;;;; The TCA8418 and BMI270 drivers live in library/ (keypad/tca8418.lisp,
 ;;;; imu/bmi270.lisp); this file is the Cardputer-ADV board wiring + the app.
+;;;; Every driver call takes the I2C bus index (0..1) first: the internal bus
+;;;; is initialized below and *i2c-bus* holds the returned index.
 ;;;;
 ;;;; Build with:
 ;;;;   (secd-lisp:secd-compile-file "examples/cardputer-input.lisp"
@@ -37,10 +39,13 @@
             (:keypad/tca8418)
             (:imu/bmi270)))
 
-;;; Internal I2C bus (Cardputer-ADV): SDA=8, SCL=9, 400 kHz.
+;;; Internal I2C bus (Cardputer-ADV): SDA=8, SCL=9, 400 kHz. %i2c-init picks
+;;; the first free controller and returns its bus index (0 or 1); this runs
+;;; at program start, before main.
 (defconstant +i2c-sda+ 8)
 (defconstant +i2c-scl+ 9)
 (defconstant +i2c-khz+ 400)
+(defvar *i2c-bus* (%i2c-init +i2c-sda+ +i2c-scl+ +i2c-khz+))
 
 ;;; Board wiring: devices on the internal I2C bus.
 (defconstant +kbd-addr+ 0x34)    ; TCA8418 keypad controller
@@ -128,7 +133,7 @@
 
 ;;; Read one event, remap the TCA8418 key number to a Cardputer (row,col).
 (defun kbd-event (mods fn)
-  (let ((ev (tca8418:event +kbd-addr+)))
+  (let ((ev (tca8418:event *i2c-bus* +kbd-addr+)))
     (let ((press (tca8418:event-press ev))
           (kn (tca8418:event-key ev)))
       (if (< kn 0)
@@ -144,7 +149,7 @@
 
 ;;; Drain any pending events (KEY_LCK_EC low 4 bits = FIFO depth).
 (defun kbd-scan (mods fn)
-  (let ((count (tca8418:count +kbd-addr+)))
+  (let ((count (tca8418:count *i2c-bus* +kbd-addr+)))
     (if (> count 0)
         (progn
           (kbd-event mods fn)
@@ -164,9 +169,8 @@
   (%usb-hid-add)                  ; HID keyboard interface
   (%usb-mouse-add)                ; HID mouse interface
   (%usb-start)                    ; freeze + enumerate
-  (%i2c-init +i2c-sda+ +i2c-scl+ +i2c-khz+)
-  (tca8418:init +kbd-addr+)
-  (bmi270:init +imu-addr+)
+  (tca8418:init *i2c-bus* +kbd-addr+)
+  (bmi270:init *i2c-bus* +imu-addr+)
   (let ((mods (make-vector 1))    ; held Ctrl/Shift/Alt bits
         (fn (make-vector 1))      ; FN-layer flag
         (tick 0))                 ; loop counter
@@ -174,7 +178,7 @@
       (kbd-scan mods fn)
       (setf tick (+ tick 1))
       ;; Roll -> pointer X, pitch -> pointer Y.
-      (%hid-mouse 0 (bmi270:word-scale +imu-addr+ bmi270:+gyr-y-lsb+)
-                  (bmi270:word-scale +imu-addr+ bmi270:+gyr-x-lsb+) 0)
+      (%hid-mouse 0 (bmi270:word-scale *i2c-bus* +imu-addr+ bmi270:+gyr-y-lsb+)
+                  (bmi270:word-scale *i2c-bus* +imu-addr+ bmi270:+gyr-x-lsb+) 0)
       (%sleep 10))))
 
