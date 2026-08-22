@@ -59,3 +59,54 @@
                                   (secd-lisp:ast-node-value
                                     (secd-lisp:ast-node-value expr))))
                    "VREF")))))
+
+(test parse-sharp-cond-include
+  (let ((secd-lisp:*compile-features* (list "ESP32")))
+    (let ((ast (secd-lisp:parse (secd-lisp:tokenize "#+esp32 42"))))
+      (is (= (length (secd-lisp:ast-node-value ast)) 1))
+      (let ((expr (first (secd-lisp:ast-node-value ast))))
+        (is (eq (secd-lisp:ast-node-type expr) :integer))
+        (is (= (secd-lisp:ast-node-value expr) 42))))))
+
+(test parse-sharp-cond-exclude
+  (let ((secd-lisp:*compile-features* nil))
+    (let ((ast (secd-lisp:parse (secd-lisp:tokenize "#+esp32 42"))))
+      ;; Skipped top-level forms vanish entirely.
+      (is (= (length (secd-lisp:ast-node-value ast)) 0)))))
+
+
+(test parse-sharp-cond-minus-includes-when-absent
+  (let ((secd-lisp:*compile-features* nil))
+    (let ((ast (secd-lisp:parse (secd-lisp:tokenize "#-esp32 7"))))
+      (is (eq (secd-lisp:ast-node-type
+               (first (secd-lisp:ast-node-value ast))) :integer))
+      (is (= (secd-lisp:ast-node-value
+              (first (secd-lisp:ast-node-value ast))) 7)))))
+
+(test parse-sharp-cond-or-spec
+  (progn
+    (let ((secd-lisp:*compile-features* (list "RP2040")))
+      (let ((ast (secd-lisp:parse (secd-lisp:tokenize "#+(or rp2040 rp2350) 1"))))
+        (is (eq (secd-lisp:ast-node-type
+                 (first (secd-lisp:ast-node-value ast))) :integer))))
+    (let ((secd-lisp:*compile-features* nil))
+      (let ((ast (secd-lisp:parse (secd-lisp:tokenize "#+(or rp2040 rp2350) 1"))))
+        (is (= (length (secd-lisp:ast-node-value ast)) 0))))))
+
+(test parse-sharp-cond-not-spec
+  (progn
+    (let ((secd-lisp:*compile-features* (list "RP2040")))
+      (let ((ast (secd-lisp:parse (secd-lisp:tokenize "#+(not esp32) 1"))))
+        (is (eq (secd-lisp:ast-node-type
+                 (first (secd-lisp:ast-node-value ast))) :integer))))
+    (let ((secd-lisp:*compile-features* (list "ESP32")))
+      (let ((ast (secd-lisp:parse (secd-lisp:tokenize "#+(not esp32) 1"))))
+        (is (= (length (secd-lisp:ast-node-value ast)) 0))))))
+
+(test parse-sharp-cond-skips-vanish-inside-lists
+  (let ((secd-lisp:*compile-features* nil))
+    (let ((ast (secd-lisp:parse (secd-lisp:tokenize "(list 1 #+nope 2 3)"))))
+      (let ((call (first (secd-lisp:ast-node-value ast))))
+        ;; skipped operand vanishes: operands are 1 and 3
+        (is (= (length (secd-lisp:ast-node-children call)) 2))))))
+

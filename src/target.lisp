@@ -23,6 +23,7 @@
   primitives
   usb
   constraints
+  board-pins   ; board_pins table (led_pin / ws2812_pin / ...) or nil
   firmware-path)  ; Path to .machine file
 
 ;;; Current target
@@ -91,6 +92,7 @@
          :primitives (gethash "primitives" metadata)
          :usb (gethash "usb" metadata)
          :constraints (gethash "constraints" metadata)
+         :board-pins (gethash "board_pins" metadata)
          :firmware-path file)))))
 
 ;;; Set current target

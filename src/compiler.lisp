@@ -766,6 +766,8 @@ from the target's .machine metadata (the per-chip JSON)."
   "Process the top-level FORMS of a program or library file."
   (dolist (form forms)
     (cond
+      ;; Reader-conditional form filtered out at parse time: nothing to do.
+      ((eq (ast-node-type form) :sharp-skip) nil)
       ((package-directive-p form)
        (compile-package-directive context form visited))
       ((require-node-p form)
@@ -790,6 +792,8 @@ from the target's .machine metadata (the per-chip JSON)."
   (if (package-directive-p node)
       (compile-package-directive context node)
       (case (ast-node-type node)
+    ;; Reader-conditional form whose feature did not match: emit nothing.
+    (:sharp-skip nil)
     ;; Program (top-level)
     ;; Layout: [JMP <entry>] [defun blobs (skipped at runtime)] [entry]
     ;; Defun blobs are compiled first so the entry can forward-reference them;
@@ -1248,6 +1252,23 @@ from the target's .machine metadata (the per-chip JSON)."
   (make-ast-node :type :cond :value nil :children clauses))
 
 ;;; Compile AST to bytecode
+
+;;; Reader conditionals (see parser.lisp): *compile-features* is defined
+;;; there; here we derive it from the loaded target.
+
+(defun compute-compile-features ()
+  "Derive the compile-time feature list from the loaded target.
+Features: board name, chip name, every board \"features\" entry, and the
+derived \"led\" / \"ws2812\" markers from board_pins. All uppercase strings."
+  (let ((out nil))
+    (flet ((add (x) (when x (push (string-upcase (string x)) out))))
+      (when *target*
+        (add (target-name *target*))
+        (dolist (f (target-features *target*)) (add f))
+        (let ((pins (target-board-pins *target*)))
+          (when (and pins (gethash "ws2812_pin" pins)) (add "ws2812"))
+          (when (and pins (gethash "led_pin" pins)) (add "led"))))
+      (nreverse out))))
 (defun compile-to-bytecode (ast &optional (target :rp2040)
                             &key (entry "SECD:MAIN"))
   "Compile an AST to SECD bytecode."
@@ -1265,7 +1286,12 @@ from the target's .machine metadata (the per-chip JSON)."
 ;;; Compile a file
 (defun secd-compile-file (filename &key (target :rp2040) (entry "SECD:MAIN"))
   "Compile a secd-lisp file to SECD bytecode."
-  (let* ((source (uiop:read-file-string filename))
+  ;; The target must be loaded before parsing so reader conditionals
+  ;; (#+feature / #-feature) see the right feature set.
+  (when (or (null *target*) (not (string-equal (target-name *target*) target)))
+    (setf *target* (load-target target)))
+  (let* ((*compile-features* (compute-compile-features))
+         (source (uiop:read-file-string filename))
          (tokens (tokenize source))
          (ast (parse tokens))
          (bytecode (compile-to-bytecode ast target :entry entry)))
@@ -1274,7 +1300,10 @@ from the target's .machine metadata (the per-chip JSON)."
 ;;; Compile a string
 (defun compile-string (string &key (target :rp2040) (entry "SECD:MAIN"))
   "Compile a secd-lisp string to SECD bytecode."
-  (let* ((tokens (tokenize string))
+  (when (or (null *target*) (not (string-equal (target-name *target*) target)))
+    (setf *target* (load-target target)))
+  (let* ((*compile-features* (compute-compile-features))
+         (tokens (tokenize string))
          (ast (parse tokens))
          (bytecode (compile-to-bytecode ast target :entry entry)))
     bytecode))

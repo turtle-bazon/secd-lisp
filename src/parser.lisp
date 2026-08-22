@@ -32,6 +32,39 @@
     (incf (parser-position parser))
     token))
 
+;;; Reader conditionals (#+feature / #-feature)
+;;;
+;;; The compile-time feature set is bound in *compile-features* by the
+;;; compiler before parsing, derived from the loaded target's metadata
+;;; (board name, chip, features/capabilities lists and ws2812/led presence).
+(defvar *compile-features* nil
+  "List of uppercase feature-name strings active for this compilation.")
+
+(defun ast-node-symbol-string (node)
+  "Uppercase symbol name of a symbol/keyword AST node, or NIL."
+  (when (and node (ast-symbol-p node))
+    (let ((name (ast-node-value node)))
+      (string-upcase (string-trim ":" name)))))
+
+(defun feature-match-p (spec)
+  "Evaluate a reader-conditional SPEC against *compile-features*.
+SPEC is a symbol (member test) or (and ...)/(or ...)/(not ...) forms."
+  (let ((sym (ast-node-symbol-string spec)))
+    (cond
+      (sym
+       (if (or (string= sym "T") (string= sym "OTHERWISE"))
+           t
+           (member sym *compile-features* :test #'string=)))
+      ((and (ast-application-p spec)
+            (ast-symbol-p (ast-node-value spec)))
+       (let ((op (ast-node-symbol-string (ast-node-value spec))))
+         (cond
+           ((string= op "AND") (every #'feature-match-p (ast-node-children spec)))
+           ((string= op "OR")  (some  #'feature-match-p (ast-node-children spec)))
+           ((string= op "NOT") (not (feature-match-p (first (ast-node-children spec)))))
+           (t (error "Unsupported feature combinator ~A" op)))))
+      (t (error "Bad feature spec in #+/- expression")))))
+
 ;;; Expect a specific token type
 (defun parser-expect (parser type)
   "Expect and consume a token of the given type."
@@ -141,6 +174,19 @@
        (let ((value (parse-expression parser)))
          (make-ast-node :type :splice :value value
                         :line (token-line token) :column (token-column token))))
+
+      ;; Reader conditional: parse the feature spec, then the conditioned
+      ;; form; return the form when the condition holds (#+: feature present,
+      ;; #-: absent), a :sharp-skip node (compiled as nothing) otherwise.
+      (:sharp-cond
+       (let* ((plus (eq (token-value token) :plus))
+              (spec (progn (parser-advance parser) (parse-expression parser)))
+              (present (feature-match-p spec))
+              (match (if plus present (not present))))
+         (let ((form (parse-expression parser)))
+           (if match
+               form
+               (make-ast-node :type :sharp-skip)))))
       
       ;; Dot
       (:dot
@@ -337,7 +383,10 @@
            (setf dotted (parse-expression parser)))
           ;; Regular element
           (t
-           (push (parse-expression parser) elements)))))))
+           (let ((element (parse-expression parser)))
+             ;; Reader-conditional misses vanish entirely, even inside lists.
+             (unless (eq (ast-node-type element) :sharp-skip)
+               (push element elements)))))))))
 
 ;;; Parse a list of expressions
 (defun parse-expressions (parser)
@@ -347,7 +396,9 @@
       (let ((token (parser-peek parser)))
         (when (or (null token) (eq (token-type token) :eof))
           (return (nreverse expressions)))
-        (push (parse-expression parser) expressions)))))
+        (let ((expression (parse-expression parser)))
+          (unless (eq (ast-node-type expression) :sharp-skip)
+            (push expression expressions)))))))
 
 ;;; Parse tokens into AST
 (defun parse (tokens)

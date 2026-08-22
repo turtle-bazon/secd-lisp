@@ -294,6 +294,16 @@
       ;; Byte-vector literal #( ... )
       ((and (eql ch #\#) (eql (lexer-peek lexer 1) #\())
        (lexer-read-byte-vector lexer))
+      ;; Reader conditional: #+feature / #-feature. The feature spec and the
+      ;; conditioned form are consumed by the parser.
+      ((and (eql ch #\#) (member (lexer-peek lexer 1) '(#\+ #\-)))
+       (let ((sign (lexer-peek lexer 1)))
+         (lexer-advance lexer)
+         (lexer-advance lexer)
+         (make-token :sharp-cond
+                     (if (char= sign #\+) :plus :minus)
+                     (lexer-line lexer)
+                     (- (lexer-column lexer) 2))))
       ;; Dot
       ((eql ch #\.)
        (lexer-advance lexer)

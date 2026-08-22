@@ -106,3 +106,17 @@
 (test tokenize-byte-vector-non-integer
   (signals error
     (secd-lisp:tokenize "#(a b)")))
+
+(test tokenize-sharp-cond-plus
+  (let ((tokens (secd-lisp:tokenize "#+esp32 1")))
+    (is (>= (length tokens) 2))
+    (is (eq (secd-lisp:token-type (first tokens)) :sharp-cond))
+    (is (eq (secd-lisp:token-value (first tokens)) :plus))
+    (is (eq (secd-lisp:token-type (second tokens)) :symbol))
+    (is (string-equal (string (secd-lisp:token-value (second tokens))) "esp32"))))
+
+(test tokenize-sharp-cond-minus
+  (let ((tokens (secd-lisp:tokenize "#-esp32 1")))
+    (is (>= (length tokens) 2))
+    (is (eq (secd-lisp:token-type (first tokens)) :sharp-cond))
+    (is (eq (secd-lisp:token-value (first tokens)) :minus))))

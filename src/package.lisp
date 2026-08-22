@@ -20,6 +20,7 @@
    ;; Parser
    #:parse
    #:parse-expression
+   #:*compile-features*
    #:ast-node
    #:ast-node-type
    #:ast-node-value
