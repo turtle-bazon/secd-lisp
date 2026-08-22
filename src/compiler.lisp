@@ -33,6 +33,7 @@
 
 ;;; Bytecode instructions (matching secd-machine bytecode.h)
 (defconstant +op-stop+ #x00)
+(defconstant +op-ldcw+ #x05)
 (defconstant +op-ldm+ #x01)
 (defconstant +op-ldc+ #x02)
 (defconstant +op-ldf+ #x03)
@@ -183,13 +184,22 @@
   "Compile a literal value."
   (cond
     ((integerp value)
-     ;; LDC carries a 16-bit operand; larger (or silently truncated) values
-     ;; must be rejected at compile time rather than misinterpreted on the VM.
-     (unless (and (>= value -32768) (<= value 65535))
-       (error "Integer literal ~A does not fit the LDC range [-32768, 65535]; ~
-               note also that small-fixnum targets cap positive literals lower" value))
-     (emit-opcode context +op-ldc+)
-     (emit-u16 context (logand value #xffff)))
+     ;; The VM's immediate fixnums are 12-bit signed (secd_make_fixnum masks
+     ;; the LDC operand), so anything outside [-2048, 2047] must go through
+     ;; the boxed wide-integer path: LDCW carries a 24-bit unsigned operand
+     ;; and materializes a BIGNUM on the stack.
+     (cond
+       ((and (>= value -2048) (<= value 2047))
+        (emit-opcode context +op-ldc+)
+        (emit-u16 context (logand value #xffff)))
+       ((and (plusp value) (<= value #xFFFFFF))
+        (emit-opcode context +op-ldcw+)
+        (emit-byte context (logand (ash value -16) #xff))
+        (emit-byte context (logand (ash value -8) #xff))
+        (emit-byte context (logand value #xff)))
+       (t
+        (error "Integer literal ~A out of range: fixnums are 12-bit signed, ~
+                wide constants are 24-bit unsigned" value))))
     ((vectorp value)
      ;; Byte-vector literal (list of bytes). Guard against strings.
      (when (and (vectorp value)

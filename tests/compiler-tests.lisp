@@ -98,14 +98,23 @@
     (is (bytecode-has bytecode #x43))))               ; LDG
 
 (test compile-literal-range
-  ;; LDC carries a 16-bit operand: out-of-range literals are a compile
-  ;; error instead of being silently truncated (e.g. a baud rate).
+  ;; Immediate fixnums are 12-bit signed; larger values are emitted as
+  ;; boxed wide constants (LDCW, opcode 0x05) instead of being truncated,
+  ;; and beyond 24 bits they are rejected.
+  (let ((bc (secd-lisp:compile-string "(defun main () 115200)"
+                                      :target :rp2040-zero)))
+    ;; The wide-load opcode must appear in the bytecode.
+    (is (position #x05 bc :start 4)))
+  (is (secd-lisp:compile-string "(defun main () 16777215)"
+                                :target :rp2040-zero))
+  (is (secd-lisp:compile-string "(defun main () 2047)"
+                                :target :rp2040-zero))
   (signals error
-    (secd-lisp:compile-string "(defun main () 115200)"
+    (secd-lisp:compile-string "(defun main () 16777216)"
                               :target :rp2040-zero))
-  ;; In-range values still compile.
-  (is (secd-lisp:compile-string "(defun main () 65535)"
-                                :target :rp2040-zero)))
+  (signals error
+    (secd-lisp:compile-string "(defun main () -4000)"
+                              :target :rp2040-zero)))
 
 (test compile-undefined-symbol-errors
   ;; Reading an undefined symbol is a hard compile error (no more silent

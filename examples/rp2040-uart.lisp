@@ -5,10 +5,9 @@
 ;;;;
 ;;;; Configures the UART and echoes received bytes back.
 ;;;;
-;;;; The baud rate must fit the target's fixnum range: RP2040-class VMs use
-;;;; 12-bit fixnums (max 2047), so 115200 is not expressible from Lisp — this
-;;;; example runs the UART at 9600. (Larger constants are rejected by the
-;;;; compiler rather than silently truncated.)
+;;;; The baud rate exceeds the VM's 12-bit immediate fixnum range, so it is
+;;;; emitted as a boxed wide constant (LDCW): the compiler stores the value,
+;;;; the VM materializes it as a BIGNUM, and %uart-init decodes either kind.
 
 ;; Echo a byte back if it is non-zero.
 (defun echo-byte (byte)
@@ -17,6 +16,6 @@
       0))
 
 (defun main ()
-  (%uart-init 9600)
+  (%uart-init 115200)
   (loop
     (echo-byte (%uart-read))))
