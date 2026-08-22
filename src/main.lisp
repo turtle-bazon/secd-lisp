@@ -101,10 +101,12 @@ library search path."
                                                    "RP2040"))
                                 "KEYWORD"))
            (esp32-target (search "ESP32" (symbol-name target-name)))
+           (bin-target (or esp32-target
+                           (search "STM32" (symbol-name target-name))))
            (output-file (or (clingon:getopt cmd :output-file)
                             (format nil "~A.~A"
                                     (pathname-name (pathname input-file))
-                                    (if esp32-target "bin" "uf2"))))
+                                    (if bin-target "bin" "uf2"))))
            (entry-fn (or (clingon:getopt cmd :entry) "SECD:MAIN")))
       (handler-case
           (progn

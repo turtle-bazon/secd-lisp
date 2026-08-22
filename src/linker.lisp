@@ -303,12 +303,14 @@ Equivalent to:  cat firmware.bin <bytecode>.secd > final.bin"
 
 (defun link-machine (machine-path bytecode output-path)
   "Link bytecode with a .machine file to produce the final flash image.
-UF2 targets (rp2040/rp2350/samd21) get a .uf2; ESP32 targets get a single
-concatenated .bin (see link-machine-esp32)."
+UF2 targets (rp2040/rp2350/samd21) get a .uf2; ESP32 and bare-metal STM32
+targets get a single concatenated .bin (see link-machine-esp32)."
   (let ((family-name (machine-family-name machine-path)))
     (if (and family-name
              (or (string-equal family-name "esp32s3")
-                 (string-equal family-name "esp32c3")))
+                 (string-equal family-name "esp32c3")
+                 (string-equal family-name "stm32f103")
+                 (string-equal family-name "stm32f401")))
         (link-machine-esp32 machine-path bytecode output-path)
         (link-machine-uf2 machine-path bytecode output-path))))
 
