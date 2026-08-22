@@ -4,14 +4,14 @@
 ;;;; License: GPL3
 ;;;;
 ;;;; Runs on a HID-capable board (e.g. RP2040 / RP2350). USB composite is
-;;;; brought up from Lisp via %usb-init with a mask that selects which
-;;;; interfaces the host sees:
-;;;;   bit0 = HID keyboard, bit1 = Lisp-owned serial console.
-;;;; The first CDC console (print/format) is always exposed.
+;;;; brought up from Lisp: %usb-init, then interface additions (%usb-hid-add,
+;;;; %usb-serial-add, %usb-mouse-add), then %usb-start to freeze and
+;;;; enumerate. The first CDC console (print/format) is always exposed.
+;;;; Device identity is settable before start via %usb-vid / %usb-pid /
+;;;; %usb-manufacturer / %usb-product / %usb-serial.
 ;;;;
-;;;; Here we ask for BOTH: (%usb-init 3). A button on GPIO 10 sends the
-;;;; HID key 'a'; every byte received on the Lisp serial console is echoed
-;;;; back to it.
+;;;; Here we add just the HID keyboard. A button on GPIO 10 sends the HID
+;;;; key 'a'.
 ;;;;
 ;;;; NOTE: this program requires %hid-key, which only exists on targets whose
 ;;;; USB controller supports the HID device class (see the target's .machine

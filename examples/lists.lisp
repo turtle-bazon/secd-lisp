@@ -14,4 +14,8 @@
   (print (make-list))
   (print (car (cons 1 2)))
   (print (cdr (cons 1 2)))
-  (print (if (null (cons 1 nil)) t nil)))
+  ;; Predicates: null?, pair?, atom?
+  (print (null? nil))
+  (print (null? (cons 1 nil)))
+  (print (pair? (cons 1 2)))
+  (print (atom? 5)))

@@ -183,6 +183,11 @@
   "Compile a literal value."
   (cond
     ((integerp value)
+     ;; LDC carries a 16-bit operand; larger (or silently truncated) values
+     ;; must be rejected at compile time rather than misinterpreted on the VM.
+     (unless (and (>= value -32768) (<= value 65535))
+       (error "Integer literal ~A does not fit the LDC range [-32768, 65535]; ~
+               note also that small-fixnum targets cap positive literals lower" value))
      (emit-opcode context +op-ldc+)
      (emit-u16 context (logand value #xffff)))
     ((vectorp value)

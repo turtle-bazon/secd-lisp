@@ -3,9 +3,12 @@
 ;;;; Copyright (C) 2026
 ;;;; License: GPL3
 ;;;;
-;;;; UART echo: configures the UART and echoes received bytes back.
-;;;; (Note: the compiler's `let` binding-list support is pending, so this
-;;;; example passes the byte through a helper function instead.)
+;;;; Configures the UART and echoes received bytes back.
+;;;;
+;;;; The baud rate must fit the target's fixnum range: RP2040-class VMs use
+;;;; 12-bit fixnums (max 2047), so 115200 is not expressible from Lisp — this
+;;;; example runs the UART at 9600. (Larger constants are rejected by the
+;;;; compiler rather than silently truncated.)
 
 ;; Echo a byte back if it is non-zero.
 (defun echo-byte (byte)
@@ -14,6 +17,6 @@
       0))
 
 (defun main ()
-  (%uart-init 115200)
+  (%uart-init 9600)
   (loop
     (echo-byte (%uart-read))))

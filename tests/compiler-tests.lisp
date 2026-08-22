@@ -97,6 +97,16 @@
     (is (bytecode-has bytecode #x44))                 ; STG
     (is (bytecode-has bytecode #x43))))               ; LDG
 
+(test compile-literal-range
+  ;; LDC carries a 16-bit operand: out-of-range literals are a compile
+  ;; error instead of being silently truncated (e.g. a baud rate).
+  (signals error
+    (secd-lisp:compile-string "(defun main () 115200)"
+                              :target :rp2040-zero))
+  ;; In-range values still compile.
+  (is (secd-lisp:compile-string "(defun main () 65535)"
+                                :target :rp2040-zero)))
+
 (test compile-undefined-symbol-errors
   ;; Reading an undefined symbol is a hard compile error (no more silent
   ;; placeholder constants that read garbage at runtime).

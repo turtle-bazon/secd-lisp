@@ -6,8 +6,8 @@
 ;;;; Reads a button and controls LED.
 
 ;; Pin definitions
-(defvar +led-pin+ 25)
-(defvar +button-pin+ 0)
+(defconstant +led-pin+ 25)
+(defconstant +button-pin+ 0)
 
 ;; Initialize hardware
 (defun init ()
