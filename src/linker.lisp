@@ -311,7 +311,8 @@ targets get a single concatenated .bin (see link-machine-esp32)."
                  (string-equal family-name "esp32s3")
                  (string-equal family-name "esp32c3")
                  (string-equal family-name "stm32f103")
-                 (string-equal family-name "stm32f401")))
+                 (string-equal family-name "stm32f401")
+                 (string-equal family-name "nrf52840")))
         (link-machine-esp32 machine-path bytecode output-path)
         (link-machine-uf2 machine-path bytecode output-path))))
 
