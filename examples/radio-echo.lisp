@@ -25,8 +25,8 @@
 (defconstant +channel+ 2)
 
 ;;; LED pin is board-specific; override per target with reader conditionals.
-;;; V1940 ProMicro nRF52840: user LED on P1.10.
-#+nrf52840-promicro (defconstant +led+ 42)
+;;; V1940 ProMicro nRF52840: nice!nano blue LED on P0.15.
+#+nrf52840-promicro (defconstant +led+ 15)
 #-nrf52840-promicro (defconstant +led+ 2)
 (defconstant +led-on+ 1)
 
