@@ -3,15 +3,16 @@
 ;;;; Copyright (C) 2026
 ;;;; License: GPL3
 ;;;;
-;;;; Runs on a HID-capable board (e.g. RP2040 / RP2350). USB composite is
-;;;; brought up from Lisp: %usb-init, then interface additions (%usb-hid-add,
-;;;; %usb-serial-add, %usb-mouse-add), then %usb-start to freeze and
-;;;; enumerate. The first CDC console (print/format) is always exposed.
-;;;; Device identity is settable before start via %usb-vid / %usb-pid /
-;;;; %usb-manufacturer / %usb-product / %usb-serial.
+;;;; Runs on any HID-capable board (e.g. RP2040 / RP2350 / nRF52840). USB
+;;;; composite is brought up from Lisp: %usb-init, then interface additions
+;;;; (%usb-hid-add, %usb-serial-add, %usb-mouse-add), then %usb-start to
+;;;; freeze and enumerate. The first CDC console (print/format) is always
+;;;; exposed. Device identity is settable before start via %usb-vid /
+;;;; %usb-pid / %usb-manufacturer / %usb-product / %usb-serial.
 ;;;;
-;;;; Here we add just the HID keyboard. A button on GPIO 10 sends the HID
-;;;; key 'a'.
+;;;; Here we add just the HID keyboard. A button wired active-low to GND
+;;;; (internal pull-up) sends the HID key 'a'. The button pin is selected per
+;;;; board with reader conditionals (see below).
 ;;;;
 ;;;; NOTE: this program requires %hid-key, which only exists on targets whose
 ;;;; USB controller supports the HID device class (see the target's .machine
@@ -21,12 +22,24 @@
 ;;;; Because main lives in the USB-KEYBOARD package (not SECD), point the
 ;;;; linker at it explicitly:
 ;;;;   (secd-lisp:secd-compile-file "examples/usb-keyboard.lisp"
-;;;;                                :target :rp2040 :entry "USB-KEYBOARD:MAIN")
+;;;;                                :target :rp2040-pico
+;;;;                                :entry "USB-KEYBOARD:MAIN")
+;;;;
+;;;; nRF52840 (nice!nano / ProMicro clone):
+;;;;   (secd-lisp:secd-compile-file "examples/usb-keyboard.lisp"
+;;;;                                :target :nrf52840-promicro
+;;;;                                :entry "USB-KEYBOARD:MAIN")
 
 (defpackage :usb-keyboard)
 
-(defconstant +button-pin+ 10)  ; GPIO 10 (button to GND, internal pull-up)
 (defconstant +usage-a+ 4)      ; HID keyboard usage code for 'a'
+
+;;; Button pin (active-low, wired to GND, internal pull-up).
+;;;   nRF52840 ProMicro clone: P0.31
+;;;   RP2040-family boards:     GPIO 10 (original wiring)
+#+nrf52840-promicro (defconstant +button-pin+ 31)
+#+(and (not nrf52840-promicro))
+(defconstant +button-pin+ 10)
 
 (defun button-pressed ()
   ; Active-low: the pin has an internal pull-up, so it reads 1 when the

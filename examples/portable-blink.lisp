@@ -48,7 +48,7 @@
 #+rp2040-pico       (defconstant +led-pin+ 25)
 #+rp2350-beetle     (defconstant +led-pin+ 25)
 #+lolin-s2-mini     (defconstant +led-pin+ 15)  ; external LED on a free pin
-#+nrf52840-supermini (defconstant +led-pin+ 15)
+#+nrf52840-promicro (defconstant +led-pin+ 15)   ; nice!nano blue LED on P0.15
 
 #+(or blue-pill black-pill-f401 seeed-xiao-samd21)
 (defconstant +led-off+ 1)                ; active low: lit = 0
@@ -102,6 +102,12 @@
   (led-init)
   (loop
     (led-on)
+    (%sleep 250)
+    (led-off)
+    (%sleep 250)
+    (led-on)
+    (%sleep 250)
+    (led-off)
     (%sleep 250)
     (led-off)
     (%sleep 250)))

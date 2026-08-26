@@ -16,7 +16,7 @@
 ;;;;
 ;;;;  Compile / flash:
 ;;;;   (secd-lisp:secd-compile-file "examples/radio-echo.lisp"
-;;;;                                :target :nrf52840-supermini
+;;;;                                :target :nrf52840-promicro
 ;;;;                                :entry "RADIO-ECHO:MAIN")
 
 (defpackage :radio-echo)
@@ -25,8 +25,9 @@
 (defconstant +channel+ 2)
 
 ;;; LED pin is board-specific; override per target with reader conditionals.
-#+nrf52840-supermini (defconstant +led+ 15)
-#-nrf52840-supermini (defconstant +led+ 2)
+;;; V1940 ProMicro nRF52840: user LED on P1.10.
+#+nrf52840-promicro (defconstant +led+ 42)
+#-nrf52840-promicro (defconstant +led+ 2)
 (defconstant +led-on+ 1)
 
 (defun main ()

@@ -14,52 +14,18 @@
 (defconstant +uf2-magic-end+    #x0AB16F30)
 (defconstant +uf2-flag-family+  #x2000)
 (defconstant +uf2-flag-not-main-flash+ #x8000)
-(defconstant +rp2040-family-id+         #xE48BFF56)
-(defconstant +rp2350-arm-s-family-id+   #xE48BFF59)
-(defconstant +rp2350-riscv-family-id+   #xE48BFF5A)
-(defconstant +rp2350-arm-ns-family-id+  #xE48BFF5B)
-(defconstant +samd21-family-id+         #x68ED2B88)
-(defconstant +rp2040-flash-base+ #x10000000)
-(defconstant +samd21-flash-base+ #x00002000)
-(defconstant +rp2040-page-size+ 256)
+(defconstant +uf2-page-size+ 256)
 (defconstant +uf2-payload-size+ 256)
 
-(defun uf2-family-id (family-name)
-  "Map a metadata output.family string to a UF2 family id.
-Defaults to RP2040 for nil/unknown families."
-  (cond
-    ((string-equal family-name "rp2040")       +rp2040-family-id+)
-    ((string-equal family-name "rp2350-arm-s") +rp2350-arm-s-family-id+)
-    ((string-equal family-name "rp2350-riscv") +rp2350-riscv-family-id+)
-    ((string-equal family-name "rp2350-arm-ns") +rp2350-arm-ns-family-id+)
-    ((string-equal family-name "samd21")       +samd21-family-id+)
-    (t (when family-name
-         (warn "Unknown UF2 family ~S, defaulting to RP2040" family-name))
-       +rp2040-family-id+)))
+;;; ESP32 / STM32 (bin): firmware.bin is concatenated with the SECD-header
+;;; bytecode (a plain `cat firmware.bin bytecode.secd > final.bin`).  No fixed
+;;; bytecode offset: the firmware locates the bytecode at runtime by scanning
+;;; past its own image end, so firmware size changes never require re-linking
+;;; or re-flashing a different layout.
 
-(defun uf2-flash-base (family-name)
-  "Flash base address for a metadata output.family string (absolute UF2 target base)."
-  (cond
-    ((string-equal family-name "samd21") +samd21-flash-base+)
-    (t +rp2040-flash-base+)))
-
-;;; ESP32 (esp32s3): firmware.bin is concatenated with the SECD-header bytecode
-;;; (a plain `cat firmware.bin bytecode.secd > final.bin`).  No fixed bytecode
-;;; offset: the firmware locates the bytecode at runtime by scanning past its
-;;; own image end, so firmware size changes (added/removed features) never
-;;; require re-linking or re-flashing a different layout.
-
-(defun machine-family-name (machine-path)
-  "Read output.family from the .machine metadata.json (or nil)."
-  (zip:with-zipfile (zip machine-path)
-    (let ((entry (zip:get-zipfile-entry "metadata.json" zip)))
-      (when entry
-        (let* ((metadata-data (zip:zipfile-entry-contents entry))
-               (metadata (yason:parse
-                          (map 'string #'code-char metadata-data)))
-               (output (gethash "output" metadata)))
-          (when output
-            (gethash "family" output)))))))
+;;; NOTE: secd-lisp carries no per-chip knowledge.  All UF2 family ids, flash
+;;; bases and output formats are read from each .machine's metadata "output"
+;;; section (see machine-uf2-config and link-machine).
 
 ;;; Helper: write 32-bit LE
 (defun write-u32-le (buf offset value)
@@ -148,14 +114,13 @@ elf2uf2) are skipped; they are not application code."
 
 ;;; Generate fresh UF2 from firmware binary + bytecode
 (defun generate-uf2 (firmware-bin bytecode output-file
-                      &optional (family-id +rp2040-family-id+)
-                                (flash-base +rp2040-flash-base+))
+                      &optional (family-id 0) (flash-base 0))
   "Generate a brand new UF2 file from firmware .bin and bytecode.
 Bytecode is placed contiguously after firmware at next page-aligned address."
   (let* ((firmware-size (length firmware-bin))
          (bytecode-addr (+ flash-base
-                           (* (ceiling firmware-size +rp2040-page-size+)
-                              +rp2040-page-size+)))
+                           (* (ceiling firmware-size +uf2-page-size+)
+                              +uf2-page-size+)))
          (firmware-chunks (bin-to-uf2-blocks firmware-bin flash-base))
          (bytecode-chunks (bin-to-uf2-blocks bytecode bytecode-addr))
          (total-blocks (+ (length firmware-chunks) (length bytecode-chunks)))
@@ -218,8 +183,7 @@ Bytecode is placed contiguously after firmware at next page-aligned address."
 
 ;;; Link bytecode with firmware binary to produce UF2
 (defun link-with-firmware (bytecode firmware-bin-path output-path
-                           &optional (family-id +rp2040-family-id+)
-                                     (flash-base +rp2040-flash-base+))
+                           &optional (family-id 0) (flash-base 0))
   "Link compiled bytecode with firmware .bin to produce UF2.
 Bytecode is appended to firmware binary at next page-aligned address."
   (let* ((firmware-bin (with-open-file (s firmware-bin-path
@@ -230,8 +194,8 @@ Bytecode is appended to firmware binary at next page-aligned address."
                            buf)))
          (bytecode-with-header (serialize-bytecode bytecode))
          ;; Pad firmware to next page boundary
-         (padded-size (* (ceiling (length firmware-bin) +rp2040-page-size+)
-                         +rp2040-page-size+))
+         (padded-size (* (ceiling (length firmware-bin) +uf2-page-size+)
+                         +uf2-page-size+))
          (padded-firmware (make-array padded-size :element-type '(unsigned-byte 8)
                                                  :initial-element #xFF))
          ;; Concatenate: padded firmware + bytecode
@@ -244,22 +208,38 @@ Bytecode is appended to firmware binary at next page-aligned address."
     (generate-uf2 combined #() output-path family-id flash-base)))
 
 ;;; Link command: takes .machine file + compiled bytecode, produces .uf2
-(defun machine-uf2-config (machine-path)
-  "Read output.family from the .machine metadata.json.
-Returns (values family-id flash-base)."
+
+(defun parse-id (value)
+  "Coerce a UF2 id to an integer. Accepts a fixnum or a \"0x...\" string."
+  (cond
+    ((integerp value) value)
+    ((stringp value)
+     (if (and (> (length value) 2) (string-equal (subseq value 0 2) "0x"))
+         (parse-integer value :start 2 :radix 16)
+         (parse-integer value)))
+    (t (error "Invalid UF2 id ~S" value))))
+
+(defun read-machine-output (machine-path)
+  "Return the \"output\" hash from a .machine's metadata.json (or nil)."
   (zip:with-zipfile (zip machine-path)
     (let ((entry (zip:get-zipfile-entry "metadata.json" zip)))
       (when entry
         (let* ((metadata-data (zip:zipfile-entry-contents entry))
-               (metadata (yason:parse
-                          (map 'string #'code-char metadata-data)))
-               (output (gethash "output" metadata)))
-          (when output
-            (let ((family-name (gethash "family" output)))
-              (return-from machine-uf2-config
-                (values (uf2-family-id family-name)
-                        (uf2-flash-base family-name)))))))))
-  (values +rp2040-family-id+ +rp2040-flash-base+))
+               (metadata (yason:parse (map 'string #'code-char metadata-data))))
+          (gethash "output" metadata))))))
+
+(defun machine-uf2-config (machine-path)
+  "Return (values family-id flash-base) for a .machine.
+Both values are read from the metadata's output section
+(uf2_family_id / base_address) so secd-lisp carries no per-chip knowledge."
+  (let ((output (read-machine-output machine-path)))
+    (unless (and output
+                 (gethash "uf2_family_id" output)
+                 (gethash "base_address" output))
+      (error "Machine ~A metadata has no output.uf2_family_id/base_address"
+             machine-path))
+    (values (parse-id (gethash "uf2_family_id" output))
+            (parse-id (gethash "base_address" output)))))
 
 (defun read-zip-entry (zip-path entry-name)
   "Read a raw byte array entry out of a .machine zip."
@@ -281,10 +261,10 @@ Returns (values family-id flash-base)."
                                   :type "secd")
                    output-path))
 
-(defun link-machine-esp32 (machine-path bytecode output-path)
-  "ESP32 link: concatenate firmware.bin with the SECD-header bytecode and write
-the standalone .secd alongside. Flash the .bin at the app offset (0x10000); the
-bytecode follows the firmware image, located at runtime by scanning.
+(defun link-machine-bin (machine-path bytecode output-path)
+  "Raw (non-UF2) link: concatenate firmware.bin with the SECD-header bytecode
+and write the standalone .secd alongside. The bytecode follows the firmware
+image, located at runtime by scanning.
 Equivalent to:  cat firmware.bin <bytecode>.secd > final.bin"
   (let* ((firmware (read-zip-entry machine-path "firmware.bin"))
          (bytecode-with-header (serialize-bytecode bytecode))
@@ -303,18 +283,18 @@ Equivalent to:  cat firmware.bin <bytecode>.secd > final.bin"
 
 (defun link-machine (machine-path bytecode output-path)
   "Link bytecode with a .machine file to produce the final flash image.
-UF2 targets (rp2040/rp2350/samd21) get a .uf2; ESP32 and bare-metal STM32
-targets get a single concatenated .bin (see link-machine-esp32)."
-  (let ((family-name (machine-family-name machine-path)))
-    (if (and family-name
-             (or (string-equal family-name "esp32s2")
-                 (string-equal family-name "esp32s3")
-                 (string-equal family-name "esp32c3")
-                 (string-equal family-name "stm32f103")
-                 (string-equal family-name "stm32f401")
-                 (string-equal family-name "nrf52840")))
-        (link-machine-esp32 machine-path bytecode output-path)
-        (link-machine-uf2 machine-path bytecode output-path))))
+The output format (uf2 or bin) is read from the .machine metadata's
+output section, so secd-lisp stays chip-agnostic."
+  (let ((output (read-machine-output machine-path)))
+    (unless output
+      (error "Machine ~A has no output section in metadata" machine-path))
+    (let ((format (gethash "format" output)))
+      (cond
+        ((string-equal format "bin")
+         (link-machine-bin machine-path bytecode output-path))
+        ((string-equal format "uf2")
+         (link-machine-uf2 machine-path bytecode output-path))
+        (t (error "Unknown output format ~S" format))))))
 
 (defun link-machine-uf2 (machine-path bytecode output-path)
   "Link bytecode with .machine file to produce .uf2.
