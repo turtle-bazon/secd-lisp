@@ -35,11 +35,12 @@
 (defconstant +usage-a+ 4)      ; HID keyboard usage code for 'a'
 
 ;;; Button pin (active-low, wired to GND, internal pull-up).
-;;;   nRF52840 ProMicro clone: P0.31
+;;;   nRF52840 ProMicro clone: P0.02  (P0.31 is held low on most nice!nano
+;;;                                clones — RGB-LED data / pull-down — so it
+;;;                                can't be used as an input there)
 ;;;   RP2040-family boards:     GPIO 10 (original wiring)
-#+nrf52840-promicro (defconstant +button-pin+ 31)
-#+(and (not nrf52840-promicro))
-(defconstant +button-pin+ 10)
+#+nrf52840-promicro (defconstant +button-pin+ 2)
+#-nrf52840-promicro (defconstant +button-pin+ 10)
 
 (defun button-pressed ()
   ; Active-low: the pin has an internal pull-up, so it reads 1 when the
