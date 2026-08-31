@@ -123,6 +123,13 @@ library search path."
                                                :target target-name
                                                :entry entry-fn)))
               (format t "Bytecode: ~A bytes~%" (length bytecode))
+              ;; Also save the raw .secd bytecode separately (no firmware wrapper)
+              (let ((secd-out (format nil "~A.secd" (pathname-name output-file))))
+                (with-open-file (s secd-out :direction :output
+                                        :element-type '(unsigned-byte 8)
+                                        :if-exists :supersede)
+                  (write-sequence bytecode s))
+                (format t "Raw bytecode: ~A~%" secd-out))
               (format t "Merging with firmware: ~A~%"
                       (target-firmware-path *target*))
               (link-machine (target-firmware-path *target*) bytecode output-file)
