@@ -185,11 +185,11 @@
           nil)
       (setf tick (+ tick 1))
       ;; Roll -> pointer X, pitch -> pointer Y.
-      (%hid-mouse 0 (bmi270:word-scale +imu-addr+ bmi270:gyr-y-lsb)
-                  (bmi270:word-scale +imu-addr+ bmi270:gyr-x-lsb) 0)
+      (%hid-mouse 0 (bmi270:word-scale +imu-addr+ bmi270:+gyr-y-lsb+)
+                  (bmi270:word-scale +imu-addr+ bmi270:+gyr-x-lsb+) 0)
       (if (= 0 (mod tick 10))
           (progn
-            (print (bmi270:word-scale +imu-addr+ bmi270:gyr-y-lsb))
-            (print (bmi270:word-scale +imu-addr+ bmi270:gyr-x-lsb)))
+            (print (bmi270:word-scale +imu-addr+ bmi270:+gyr-y-lsb+))
+            (print (bmi270:word-scale +imu-addr+ bmi270:+gyr-x-lsb+)))
           nil)
       (%sleep 10))))

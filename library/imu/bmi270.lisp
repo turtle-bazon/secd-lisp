@@ -13,30 +13,30 @@
 ;;;;                               by 1/64, and clamp to the int8 range that
 ;;;;                               %hid-mouse accepts
 ;;;;
-;;;; Register names are exported as constants prefixed with BMI270:+
-;;;; (e.g. BMI270:+CHIP-ID+, BMI270:+PWR-CTRL+).
+;;;; Register names are exported as +CONSTANT+ (e.g. BMI270:+CHIP-ID+,
+;;;; BMI270:+PWR-CTRL+).
 ;;;;
 ;;;; Use from a program with:
 ;;;;   (defpackage :my-app (:require (:imu/bmi270)))
 
-(defpackage "BMI270"
+(defpackage :bmi270
   (:export init word-scale)
-  (:export CHIP-ID ACC-X-LSB GYR-X-LSB GYR-Y-LSB INTERNAL-STATUS
-           INT-MAP-DATA INIT-CTRL INIT-ADDR-0 PWR-CONF PWR-CTRL CMD
-           SOFT-RESET))
+  (:export +CHIP-ID+ +ACC-X-LSB+ +GYR-X-LSB+ +GYR-Y-LSB+ +INTERNAL-STATUS+
+           +INT-MAP-DATA+ +INIT-CTRL+ +INIT-ADDR-0+ +PWR-CONF+ +PWR-CTRL+
+           +CMD+ +SOFT-RESET+))
 
-(defconstant CHIP-ID 0)              ; 0x00  read-back must be 0x24
-(defconstant ACC-X-LSB 12)           ; 0x0C
-(defconstant GYR-X-LSB 18)           ; 0x12
-(defconstant GYR-Y-LSB 20)           ; 0x14
-(defconstant INTERNAL-STATUS 33)     ; 0x21
-(defconstant INT-MAP-DATA 88)        ; 0x58
-(defconstant INIT-CTRL 89)           ; 0x59
-(defconstant INIT-ADDR-0 91)         ; 0x5B
-(defconstant PWR-CONF 124)           ; 0x7C
-(defconstant PWR-CTRL 125)           ; 0x7D  acc_en(0) | gyr_en(1)
-(defconstant CMD 126)                ; 0x7E
-(defconstant SOFT-RESET 182)         ; 0xB6
+(defconstant +CHIP-ID+ 0)            ; 0x00  read-back must be 0x24
+(defconstant +ACC-X-LSB+ 12)         ; 0x0C
+(defconstant +GYR-X-LSB+ 18)         ; 0x12
+(defconstant +GYR-Y-LSB+ 20)         ; 0x14
+(defconstant +INTERNAL-STATUS+ 33)   ; 0x21
+(defconstant +INT-MAP-DATA+ 88)      ; 0x58
+(defconstant +INIT-CTRL+ 89)         ; 0x59
+(defconstant +INIT-ADDR-0+ 91)       ; 0x5B
+(defconstant +PWR-CONF+ 124)         ; 0x7C
+(defconstant +PWR-CTRL+ 125)         ; 0x7D  acc_en(0) | gyr_en(1)
+(defconstant +CMD+ 126)              ; 0x7E
+(defconstant +SOFT-RESET+ 182)       ; 0xB6
 
 (defun reg-write (addr reg value)
   (%i2c-write addr (list reg value)))
@@ -70,7 +70,7 @@
 
 ;;; Bosch bmi270_config_file (8192 bytes) with the INIT_DATA_ADDR register
 ;;; byte (94 = 0x5E) as element 0 so one %i2c-write-v uploads it all.
-(defconstant CONFIG
+(defconstant +CONFIG+
   #(  94 200 46 0 46 128 46 61 177 200 46 0 46 128 46 145
   3 128 46 188 176 128 46 163 3 200 46 0 46 128 46 0
   176 80 48 33 46 89 245 16 48 33 46 106 245 128 46 59
@@ -588,18 +588,18 @@
 ;;; Bring up the BMI270: soft-reset, upload the 8192-byte Bosch config
 ;;; blob, wait for the config engine to finish, then enable acc+gyr.
 (defun init (addr)
-  (reg-write addr CMD SOFT-RESET)
+  (reg-write addr +CMD+ +SOFT-RESET+)
   (%sleep 5)
-  (poll-nonzero addr PWR-CONF 32)
+  (poll-nonzero addr +PWR-CONF+ 32)
   ;; The chip should answer 0x24 (36); print what we actually read.
-  (print (vref (reg-read addr CHIP-ID 1) 0))
-  (reg-write addr PWR-CONF 0)
-  (%i2c-write addr (list INIT-ADDR-0 0 0))
-  (%i2c-write-v addr CONFIG)
-  (reg-write addr INIT-CTRL 1)
-  (reg-write addr INT-MAP-DATA 255)
-  (poll-nonzero addr INTERNAL-STATUS 32)
+  (print (vref (reg-read addr +CHIP-ID+ 1) 0))
+  (reg-write addr +PWR-CONF+ 0)
+  (%i2c-write addr (list +INIT-ADDR-0+ 0 0))
+  (%i2c-write-v addr +CONFIG+)
+  (reg-write addr +INIT-CTRL+ 1)
+  (reg-write addr +INT-MAP-DATA+ 255)
+  (poll-nonzero addr +INTERNAL-STATUS+ 32)
   ;; Config engine is now running, but ACC and GYR are still suspended until
   ;; we turn them on via PWR_CTRL. Without this the data registers read 0.
-  (reg-write addr PWR-CTRL 3))   ; 0x03 = acc_en | gyr_en
+  (reg-write addr +PWR-CTRL+ 3))   ; 0x03 = acc_en | gyr_en
 
