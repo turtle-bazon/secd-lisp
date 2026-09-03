@@ -20,7 +20,7 @@
 ;;;;   (defpackage :my-app (:require (:imu/bmi270)))
 
 (defpackage "BMI270"
-  (:export INIT WORD-SCALE)
+  (:export init word-scale)
   (:export CHIP-ID ACC-X-LSB GYR-X-LSB GYR-Y-LSB INTERNAL-STATUS
            INT-MAP-DATA INIT-CTRL INIT-ADDR-0 PWR-CONF PWR-CTRL CMD
            SOFT-RESET))

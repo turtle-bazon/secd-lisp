@@ -19,7 +19,7 @@
 ;;;;   (defpackage :my-app (:require (:keypad/tca8418)))
 
 (defpackage :tca8418
-  (:export INIT EVENT-COUNT EVENT)
+  (:export init event-count event)
   ;;; Register addresses (see TCA8418 datasheet).
   (:export CFG INT-STAT COUNT EVENT INT-EN-1 INT-EN-2 INT-EN-3
            KP-GPIO-1 KP-GPIO-2 GPI-EM-1 GPI-EM-2 GPI-EM-3
