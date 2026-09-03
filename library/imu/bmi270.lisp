@@ -25,18 +25,18 @@
            +INT-MAP-DATA+ +INIT-CTRL+ +INIT-ADDR-0+ +PWR-CONF+ +PWR-CTRL+
            +CMD+ +SOFT-RESET+))
 
-(defconstant +CHIP-ID+ 0)            ; 0x00  read-back must be 0x24
-(defconstant +ACC-X-LSB+ 12)         ; 0x0C
-(defconstant +GYR-X-LSB+ 18)         ; 0x12
-(defconstant +GYR-Y-LSB+ 20)         ; 0x14
-(defconstant +INTERNAL-STATUS+ 33)   ; 0x21
-(defconstant +INT-MAP-DATA+ 88)      ; 0x58
-(defconstant +INIT-CTRL+ 89)         ; 0x59
-(defconstant +INIT-ADDR-0+ 91)       ; 0x5B
-(defconstant +PWR-CONF+ 124)         ; 0x7C
-(defconstant +PWR-CTRL+ 125)         ; 0x7D  acc_en(0) | gyr_en(1)
-(defconstant +CMD+ 126)              ; 0x7E
-(defconstant +SOFT-RESET+ 182)       ; 0xB6
+(defconstant +CHIP-ID+ 0x00)          ; read-back must be 0x24
+(defconstant +ACC-X-LSB+ 0x0C)
+(defconstant +GYR-X-LSB+ 0x12)
+(defconstant +GYR-Y-LSB+ 0x14)
+(defconstant +INTERNAL-STATUS+ 0x21)
+(defconstant +INT-MAP-DATA+ 0x58)
+(defconstant +INIT-CTRL+ 0x59)
+(defconstant +INIT-ADDR-0+ 0x5B)
+(defconstant +PWR-CONF+ 0x7C)
+(defconstant +PWR-CTRL+ 0x7D)         ; acc_en(0) | gyr_en(1)
+(defconstant +CMD+ 0x7E)
+(defconstant +SOFT-RESET+ 0xB6)
 
 (defun reg-write (addr reg value)
   (%i2c-write addr (list reg value)))

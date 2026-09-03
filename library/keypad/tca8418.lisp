@@ -26,27 +26,27 @@
            +DIR-1+ +DIR-2+ +DIR-3+ +INT-LVL-1+ +INT-LVL-2+ +INT-LVL-3+
            +GPIO-INT-STAT-1+ +GPIO-INT-STAT-2+ +GPIO-INT-STAT-3+))
 
-(defconstant +CFG+ 1)                ; 0x01  configuration
-(defconstant +INT-STAT+ 2)           ; 0x02  interrupt status
-(defconstant +COUNT+ 3)              ; 0x03  key-lock / event count
-(defconstant +EVENT+ 4)              ; 0x04  key event FIFO
-(defconstant +GPIO-INT-STAT-1+ 17)   ; 0x11  GPIO interrupt status 1..3
-(defconstant +GPIO-INT-STAT-2+ 18)
-(defconstant +GPIO-INT-STAT-3+ 19)
-(defconstant +INT-EN-1+ 26)          ; 0x1A  GPIO interrupt enable 1..3
-(defconstant +INT-EN-2+ 27)
-(defconstant +INT-EN-3+ 28)
-(defconstant +KP-GPIO-1+ 29)         ; 0x1D  keypad row select
-(defconstant +KP-GPIO-2+ 30)         ; 0x1E  keypad column select
-(defconstant +GPI-EM-1+ 32)          ; 0x20  GPI event mode 1..3
-(defconstant +GPI-EM-2+ 33)
-(defconstant +GPI-EM-3+ 34)
-(defconstant +DIR-1+ 35)             ; 0x23  GPIO data direction 1..3
-(defconstant +DIR-2+ 36)
-(defconstant +DIR-3+ 37)
-(defconstant +INT-LVL-1+ 38)         ; 0x26  GPIO edge/level 1..3
-(defconstant +INT-LVL-2+ 39)
-(defconstant +INT-LVL-3+ 40)
+(defconstant +CFG+ 0x01)              ; configuration
+(defconstant +INT-STAT+ 0x02)         ; interrupt status
+(defconstant +COUNT+ 0x03)            ; key-lock / event count
+(defconstant +EVENT+ 0x04)            ; key event FIFO
+(defconstant +GPIO-INT-STAT-1+ 0x11) ; GPIO interrupt status 1..3
+(defconstant +GPIO-INT-STAT-2+ 0x12)
+(defconstant +GPIO-INT-STAT-3+ 0x13)
+(defconstant +INT-EN-1+ 0x1A)         ; GPIO interrupt enable 1..3
+(defconstant +INT-EN-2+ 0x1B)
+(defconstant +INT-EN-3+ 0x1C)
+(defconstant +KP-GPIO-1+ 0x1D)        ; keypad row select
+(defconstant +KP-GPIO-2+ 0x1E)        ; keypad column select
+(defconstant +GPI-EM-1+ 0x20)         ; GPI event mode 1..3
+(defconstant +GPI-EM-2+ 0x21)
+(defconstant +GPI-EM-3+ 0x22)
+(defconstant +DIR-1+ 0x23)            ; GPIO data direction 1..3
+(defconstant +DIR-2+ 0x24)
+(defconstant +DIR-3+ 0x25)
+(defconstant +INT-LVL-1+ 0x26)        ; GPIO edge/level 1..3
+(defconstant +INT-LVL-2+ 0x27)
+(defconstant +INT-LVL-3+ 0x28)
 
 (defun reg-write (addr reg value)
   (%i2c-write addr (list reg value)))

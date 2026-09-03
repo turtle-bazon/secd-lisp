@@ -105,25 +105,43 @@
 
 ;;; Read a number
 (defun lexer-read-number (lexer)
-  "Read a number from the input."
+  "Read a number from the input. Supports decimal, hex (0x..), and binary (0b..)."
   (let ((start (lexer-position lexer))
         (start-line (lexer-line lexer))
         (start-col (lexer-column lexer))
-        (has-dot nil))
+        (has_dot nil)
+        (radix 10))
     ;; Consume an optional leading minus so negative literals work
     (when (and (eql (lexer-peek lexer) #\-)
                (digit-char-p (lexer-peek lexer 1)))
       (lexer-advance lexer))
-    ;; Read digits and optional dot
+    ;; Detect 0x / 0X (hex) or 0b / 0B (binary) prefix; only if the next
+    ;; character is itself a hex digit / 0 or 1 so that plain "0" still
+    ;; reads as zero and "08" stays decimal.
+    (when (and (eql (lexer-peek lexer) #\0)
+               (member (lexer-peek lexer 1) '(#\x #\X #\b #\B)))
+      (let ((p (lexer-peek lexer 1)))
+        (cond ((or (eql p #\x) (eql p #\X)) (setq radix 16))
+              (t (setq radix 2)))
+        (lexer-advance lexer)
+        (lexer-advance lexer)))
+    ;; Read digits and optional dot (for decimal floats; hex/binary are int-only)
     (loop while (< (lexer-position lexer) (length (lexer-input lexer)))
           for ch = (lexer-peek lexer)
-          while (or (digit-char-p ch)
-                    (and (eql ch #\.) (not has-dot) (setq has-dot t)))
+          while (or (digit-char-p ch radix)
+                    (and (eql radix 10)
+                         (eql ch #\.) (not has-dot) (setq has-dot t)))
           do (lexer-advance lexer))
     (let ((value (subseq (lexer-input lexer) start (lexer-position lexer))))
-      (if has-dot
+      (if has_dot
           (make-token :float (read-from-string value) start-line start-col)
-          (make-token :integer (parse-integer value) start-line start-col)))))
+          (make-token :integer
+                      (cond ((= radix 10) (parse-integer value))
+                            (t (parse-integer
+                                (subseq value
+                                        (if (char= (char value 0) #\-) 3 2))
+                                :radix radix)))
+                      start-line start-col)))))
 
 ;;; Read a string
 (defun lexer-read-string (lexer)

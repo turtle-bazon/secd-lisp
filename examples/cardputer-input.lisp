@@ -37,8 +37,8 @@
 (defconstant +i2c-khz+ 400)
 
 ;; Board wiring: devices on the internal I2C bus.
-(defconstant +kbd-addr+ 52)         ; 0x34  TCA8418
-(defconstant +imu-addr+ 105)        ; 0x69  BMI270 (0x68 does not ACK)
+(defconstant +kbd-addr+ 0x34)         ; TCA8418
+(defconstant +imu-addr+ 0x69)         ; BMI270 (0x68 does not ACK)
 
 ;;; HID modifier bits (Ctrl=1, Shift=2, Alt=4), modifier keys and special
 ;;; keys. The special keys below are HID usage codes, matching what the
@@ -48,13 +48,13 @@
 (defconstant +mod-alt+ 4)
 (defconstant +key-none+ 0)
 (defconstant +key-opt+ 0)
-(defconstant +key-fn+ 255)
-(defconstant +key-ctrl+ 128)
-(defconstant +key-shift+ 129)
-(defconstant +key-alt+ 130)
-(defconstant +key-backspace+ 42)     ; 0x2A
-(defconstant +key-tab+ 43)           ; 0x2B
-(defconstant +key-enter+ 40)         ; 0x28
+(defconstant +key-fn+ 0xFF)
+(defconstant +key-ctrl+ 0x80)
+(defconstant +key-shift+ 0x81)
+(defconstant +key-alt+ 0x82)
+(defconstant +key-backspace+ 0x2A)
+(defconstant +key-tab+ 0x2B)
+(defconstant +key-enter+ 0x28)
 
 ;;; Cardputer 4x14 keymap: value_first (base layer, row-major).
 (defconstant +keymap+
