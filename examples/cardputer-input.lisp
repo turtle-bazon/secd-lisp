@@ -159,6 +159,22 @@
         (%sleep 50)
         (marker n (- count 1)))))
 
+;;;; Clamp a fixnum to the signed int8 range %hid-mouse accepts.
+(defun clamp-mouse (v)
+  (if (> v 0x7F)
+      0x7F
+      (if (< v -127) -127 v)))
+
+;;;; Signed 16-bit sensor word at REG, folded into the 12-bit fixnum range
+;;;; and scaled by 1/64: r/64 = b0/64 + 4*b1, minus 1024 when the high byte
+;;;; >= 0x80 (negative), then clamped to the mouse's int8 range. No shifts.
+(defun word-scale (addr reg)
+  (let ((v (bmi270:reg-read addr reg 2)))
+    (let ((b0 (vref v 0))
+          (b1 (vref v 1)))
+      (clamp-mouse (- (+ (/ b0 64) (* 4 b1))
+                      (if (>= b1 0x80) 1024 0))))))
+
 (defun main ()
   (marker 100 10)                 ; alive: entered main
   (%usb-init)
@@ -185,11 +201,11 @@
           nil)
       (setf tick (+ tick 1))
       ;; Roll -> pointer X, pitch -> pointer Y.
-      (%hid-mouse 0 (bmi270:word-scale +imu-addr+ bmi270:+GYR-Y-LSB+)
-                  (bmi270:word-scale +imu-addr+ bmi270:+GYR-X-LSB+) 0)
+      (%hid-mouse 0 (word-scale +imu-addr+ bmi270:+GYR-Y-LSB+)
+                  (word-scale +imu-addr+ bmi270:+GYR-X-LSB+) 0)
       (if (= 0 (mod tick 10))
           (progn
-            (print (bmi270:word-scale +imu-addr+ bmi270:+GYR-Y-LSB+))
-            (print (bmi270:word-scale +imu-addr+ bmi270:+GYR-X-LSB+)))
+            (print (word-scale +imu-addr+ bmi270:+GYR-Y-LSB+))
+            (print (word-scale +imu-addr+ bmi270:+GYR-X-LSB+)))
           nil)
       (%sleep 10))))

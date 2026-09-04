@@ -7,7 +7,7 @@
 ;;;; produce data. The driver here exposes:
 ;;;;
 ;;;;   (bmi270:init addr)        — soft-reset, upload config, enable acc+gyr
-;;;;   (bmi270:word-scale addr reg)
+;;;;   (bmi270:init addr)
 ;;;;                             — read a signed 16-bit sensor word at REG,
 ;;;;                               fold into the 12-bit fixnum range, scale
 ;;;;                               by 1/64, and clamp to the int8 range that
@@ -20,7 +20,7 @@
 ;;;;   (defpackage :my-app (:require (:imu/bmi270)))
 
 (defpackage :bmi270
-  (:export init word-scale)
+  (:export init)
   (:export +CHIP-ID+ +ACC-X-LSB+ +GYR-X-LSB+ +GYR-Y-LSB+ +INTERNAL-STATUS+
            +INT-MAP-DATA+ +INIT-CTRL+ +INIT-ADDR-0+ +PWR-CONF+ +PWR-CTRL+
            +CMD+ +SOFT-RESET+))
@@ -51,22 +51,6 @@
       (if (not (= (vref (reg-read addr reg 1) 0) 0))
           t
           (poll-nonzero addr reg (- steps 1)))))
-
-;;; Clamp a fixnum to the signed int8 range %hid-mouse accepts.
-(defun clamp-mouse (v)
-  (if (> v 0x7F)
-      0x7F
-      (if (< v -127) -127 v)))
-
-;;; Signed 16-bit sensor word at REG, folded into the 12-bit fixnum range
-;;; and scaled by 1/64: r/64 = b0/64 + 4*b1, minus 1024 when the high byte
-;;; >= 0x80 (negative), then clamped to the mouse's int8 range. No shifts.
-(defun word-scale (addr reg)
-  (let ((v (reg-read addr reg 2)))
-    (let ((b0 (vref v 0))
-          (b1 (vref v 1)))
-      (clamp-mouse (- (+ (/ b0 64) (* 4 b1))
-                      (if (>= b1 0x80) 1024 0))))))
 
 ;;; Bosch bmi270_config_file (8192 bytes) with the INIT_DATA_ADDR register
 ;;; byte (94 = 0x5E) as element 0 so one %i2c-write-v uploads it all.
