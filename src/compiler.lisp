@@ -168,10 +168,13 @@
         (emit-opcode context +op-ldc+)
         (emit-u16 context (logand value #xffff)))
        ((and (plusp value) (<= value #xFFFFFF))
+        ;; Little-endian 3-byte operand (low byte first) so the C-side
+        ;; LDCW handler can read it with the same byte-OR pattern as
+        ;; LDC's 16-bit operand, no byte-swap needed.
         (emit-opcode context +op-ldcw+)
-        (emit-byte context (logand (ash value -16) #xff))
+        (emit-byte context (logand value #xff))
         (emit-byte context (logand (ash value -8) #xff))
-        (emit-byte context (logand value #xff)))
+        (emit-byte context (logand (ash value -16) #xff)))
        (t
         (error "Integer literal ~A out of range: fixnums are 12-bit signed, wide constants are 24-bit unsigned"
                value))))
@@ -573,7 +576,8 @@ Resolves local definitions, then refers/aliases, then global names."
     ("%hid-mouse" . "hid")
     ("%usb-hid-keyboard-add" . "hid")
     ("%usb-hid-mouse-add" . "hid")
-    ("%usb-vid-pid" . "hid")
+    ("%usb-vid" . "hid")
+    ("%usb-pid" . "hid")
     ("%usb-vendor" . "hid")
     ("%usb-product" . "hid")
     ("%usb-serial" . "hid")
