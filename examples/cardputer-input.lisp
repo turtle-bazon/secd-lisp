@@ -142,22 +142,9 @@
     (if (> count 0)
         (progn
           (print count)
-          (kbd-event mods fn)
-          (kbd-scan mods fn))
+           (kbd-event mods fn)
+           (kbd-scan mods fn))
         nil)))
-
-;;; --- main ----------------------------------------------------------
-
-;; Print MARKER N times with a 50ms gap. The CDC console drops TX until the
-;; host opens the port (DTR) and USB re-enumerates after %usb-start, so a
-;; single print is easily lost; repeating a few times makes it land.
-(defun marker (n count)
-  (if (= count 0)
-      nil
-      (progn
-        (print n)
-        (%sleep 50)
-        (marker n (- count 1)))))
 
 ;;;; Clamp a fixnum to the signed int8 range %hid-mouse accepts.
 (defun clamp-mouse (v)
@@ -176,29 +163,18 @@
                       (if (>= b1 0x80) 1024 0))))))
 
 (defun main ()
-  (marker 100 10)                 ; alive: entered main
   (%usb-init)
-  (marker 200 10)                 ; after usb init
   (%usb-hid-add)                  ; HID keyboard interface
-  (marker 300 10)                 ; after hid add
   (%usb-mouse-add)                ; HID mouse interface
-  (marker 400 10)                 ; after mouse add
   (%usb-start)                    ; freeze + enumerate
-  (marker 000 10)                 ; after usb start
   (print (%i2c-init +i2c-sda+ +i2c-scl+ +i2c-khz+))
-  (marker 111 10)                 ; after i2c init
   (tca8418:init +kbd-addr+)
-  (marker 222 10)                 ; after kbd init
   (bmi270:init +imu-addr+)
-  (marker 333 10)                 ; after bmi init
   (let ((mods (make-vector 1))    ; held Ctrl/Shift/Alt bits
         (fn (make-vector 1))      ; FN-layer flag
         (tick 0))                 ; heartbeat counter
     (loop
       (kbd-scan mods fn)
-      (if (= 0 (mod tick 100))
-          (print tick)
-          nil)
       (setf tick (+ tick 1))
       ;; Roll -> pointer X, pitch -> pointer Y.
       (%hid-mouse 0 (word-scale +imu-addr+ bmi270:+GYR-Y-LSB+)
