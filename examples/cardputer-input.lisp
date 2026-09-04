@@ -148,19 +148,19 @@
 
 ;;;; Clamp a fixnum to the signed int8 range %hid-mouse accepts.
 (defun clamp-mouse (v)
-  (if (> v 0x7F)
-      0x7F
+  (if (> v 127)
+      127
       (if (< v -127) -127 v)))
 
 ;;;; Signed 16-bit sensor word at REG, folded into the 12-bit fixnum range
 ;;;; and scaled by 1/64: r/64 = b0/64 + 4*b1, minus 1024 when the high byte
-;;;; >= 0x80 (negative), then clamped to the mouse's int8 range. No shifts.
+;;;; >= 128 (negative), then clamped to the mouse's int8 range. No shifts.
 (defun word-scale (addr reg)
   (let ((v (bmi270:reg-read addr reg 2)))
     (let ((b0 (vref v 0))
           (b1 (vref v 1)))
       (clamp-mouse (- (+ (/ b0 64) (* 4 b1))
-                      (if (>= b1 0x80) 1024 0))))))
+                      (if (>= b1 128) 1024 0))))))
 
 (defun main ()
   (%usb-init)
