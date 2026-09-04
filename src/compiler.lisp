@@ -36,6 +36,7 @@
 (defconstant +op-ldc+ #x02)
 (defconstant +op-ldf+ #x03)
 (defconstant +op-lde+ #x04)
+(defconstant +op-ldcw+ #x05)            ; 3-byte LE operand -> BIGNUM (for VID/PID etc)
 (defconstant +op-add+ #x10)
 (defconstant +op-sub+ #x11)
 (defconstant +op-mul+ #x12)
@@ -158,8 +159,22 @@
   "Compile a literal value."
   (cond
     ((integerp value)
-     (emit-opcode context +op-ldc+)
-     (emit-u16 context (logand value #xffff)))
+     ;; 12-bit signed fixnum range covers -2048..2047; LDC materialises a
+     ;; tagged fixnum directly. Values outside the range (up to 24 bits)
+     ;; become a BIGNUM via LDCW so primitives can read 16- to 24-bit
+     ;; constants intact (e.g. USB VID/PID).
+     (cond
+       ((and (>= value -2048) (<= value 2047))
+        (emit-opcode context +op-ldc+)
+        (emit-u16 context (logand value #xffff)))
+       ((and (plusp value) (<= value #xFFFFFF))
+        (emit-opcode context +op-ldcw+)
+        (emit-byte context (logand (ash value -16) #xff))
+        (emit-byte context (logand (ash value -8) #xff))
+        (emit-byte context (logand value #xff)))
+       (t
+        (error "Integer literal ~A out of range: fixnums are 12-bit signed, wide constants are 24-bit unsigned"
+               value))))
     ((vectorp value)
      ;; Byte-vector literal (list of bytes). Guard against strings.
      (when (and (vectorp value)
@@ -558,6 +573,10 @@ Resolves local definitions, then refers/aliases, then global names."
     ("%hid-mouse" . "hid")
     ("%usb-hid-keyboard-add" . "hid")
     ("%usb-hid-mouse-add" . "hid")
+    ("%usb-vid-pid" . "hid")
+    ("%usb-vendor" . "hid")
+    ("%usb-product" . "hid")
+    ("%usb-serial" . "hid")
     ("%usb-serial-add" . "serial")
     ("%serial-write" . "serial")
     ("%serial-read" . "serial")
