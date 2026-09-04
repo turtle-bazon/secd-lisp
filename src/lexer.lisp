@@ -105,21 +105,28 @@
 
 ;;; Read a number
 (defun lexer-read-number (lexer)
-  "Read a number from the input. Supports decimal, hex (0x..), and binary (0b..)."
+  "Read a number from the input. Supports decimal, hex (0x..), and binary (0b..).
+Negative hex/binary literals (-0x.. / -0b..) are rejected to avoid the
+two's-complement confusion between -0x7F (= 129) and -127."
   (let ((start (lexer-position lexer))
         (start-line (lexer-line lexer))
         (start-col (lexer-column lexer))
         (has_dot nil)
-        (radix 10))
-    ;; Consume an optional leading minus so negative literals work
+        (radix 10)
+        (negated nil))
+    ;; Consume an optional leading minus (decimal only)
     (when (and (eql (lexer-peek lexer) #\-)
                (digit-char-p (lexer-peek lexer 1)))
-      (lexer-advance lexer))
+      (lexer-advance lexer)
+      (setq negated t))
     ;; Detect 0x / 0X (hex) or 0b / 0B (binary) prefix; only if the next
     ;; character is itself a hex digit / 0 or 1 so that plain "0" still
     ;; reads as zero and "08" stays decimal.
     (when (and (eql (lexer-peek lexer) #\0)
                (member (lexer-peek lexer 1) '(#\x #\X #\b #\B)))
+      (when negated
+        (error "Negative hex/binary literal not allowed (line ~A, col ~A); use decimal for negatives"
+               start-line start-col))
       (let ((p (lexer-peek lexer 1)))
         (cond ((or (eql p #\x) (eql p #\X)) (setq radix 16))
               (t (setq radix 2)))
