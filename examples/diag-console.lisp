@@ -3,8 +3,8 @@
 
 (defun main ()
   (%usb-init)
-  (%usb-hid-add)
-  (%usb-mouse-add)
+  (%usb-hid-keyboard-add)
+  (%usb-hid-mouse-add)
   (%usb-start)
   (let ((tick 0))
     (loop

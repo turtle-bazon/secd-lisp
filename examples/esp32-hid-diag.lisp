@@ -23,8 +23,8 @@
 
 (defun main ()
   (%usb-init)
-  (%usb-hid-add)                  ; HID keyboard interface
-  (%usb-mouse-add)                ; HID mouse interface
+  (%usb-hid-keyboard-add)                  ; HID keyboard interface
+  (%usb-hid-mouse-add)                ; HID mouse interface
   (%usb-start)                    ; freeze + enumerate
   (loop
     (%hid-key 0 +usage-a+)        ; press+release 'a'

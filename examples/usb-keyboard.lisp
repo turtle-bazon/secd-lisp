@@ -37,7 +37,7 @@
   ; Lisp builds the USB interface set before enabling. Only the standard
   ; console (print/format) plus the HID keyboard; no extra user serial ports.
   (%usb-init)
-  (%usb-hid-add)
+  (%usb-hid-keyboard-add)
   (%usb-start)                             ; freeze + enumerate
   (%gpio-init +button-pin+ :input)
   (loop

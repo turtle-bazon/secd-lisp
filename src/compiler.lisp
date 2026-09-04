@@ -556,8 +556,8 @@ Resolves local definitions, then refers/aliases, then global names."
 (defparameter *usb-class-map*
   '(("%hid-key" . "hid")
     ("%hid-mouse" . "hid")
-    ("%usb-hid-add" . "hid")
-    ("%usb-mouse-add" . "hid")
+    ("%usb-hid-keyboard-add" . "hid")
+    ("%usb-hid-mouse-add" . "hid")
     ("%usb-serial-add" . "serial")
     ("%serial-write" . "serial")
     ("%serial-read" . "serial")

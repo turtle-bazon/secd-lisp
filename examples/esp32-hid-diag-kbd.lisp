@@ -19,7 +19,7 @@
 
 (defun main ()
   (%usb-init)
-  (%usb-hid-add)                  ; HID keyboard interface ONLY
+  (%usb-hid-keyboard-add)                  ; HID keyboard interface ONLY
   (%usb-start)
   (loop
     (%hid-key 0 +usage-a+)

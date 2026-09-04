@@ -52,7 +52,7 @@
 
 (defun main ()
   (%usb-init)
-  (%usb-mouse-add)
+  (%usb-hid-mouse-add)
   (%usb-start)                    ; freeze + enumerate
   (setf *i2c-bus* (%i2c-init +i2c-sda+ +i2c-scl+ +i2c-khz+))
   (bmi270:init *i2c-bus* +imu-addr+)

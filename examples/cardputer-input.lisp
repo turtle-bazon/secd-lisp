@@ -169,8 +169,8 @@
 
 (defun main ()
   (%usb-init)
-  (%usb-hid-add)                  ; HID keyboard interface
-  (%usb-mouse-add)                ; HID mouse interface
+  (%usb-hid-keyboard-add)        ; HID keyboard interface
+  (%usb-hid-mouse-add)            ; HID mouse interface
   (%usb-start)                    ; freeze + enumerate
   (setf *i2c-bus* (%i2c-init +i2c-sda+ +i2c-scl+ +i2c-khz+))
   (tca8418:init *i2c-bus* +kbd-addr+)
