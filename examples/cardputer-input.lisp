@@ -28,8 +28,8 @@
 ;;;; imu/bmi270.lisp); this file is the Cardputer-ADV board wiring + the app.
 
 (defpackage :cardputer-input
-  (:require (:keypad/tca8418)
-            (:imu/bmi270)))
+  (:require (:keypad/tca8418 :as :tca8418)
+            (:imu/bmi270 :as :bmi270)))
 
 ;; Internal I2C bus (Cardputer-ADV): SDA=8, SCL=9, 400 kHz.
 (defconstant +i2c-sda+ 8)

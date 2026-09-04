@@ -226,14 +226,26 @@
 
 ;;; Resolve a symbol name to its package-qualified form
 (defun canonical-sym (context name)
-  "Resolve NAME to its fully qualified symbol in the current package."
+  "Resolve NAME to its fully qualified symbol in the current package.
+Qualified names (pkg:name) are rewritten through any alias registered for
+the current package, so that the resulting key matches how the
+referring library stored its definitions."
   (let ((sname (symbol-name name)))
     (cond
-      ;; Already qualified (pkg:name / pkg::name), a keyword, t/nil, or a
-      ;; symbol from another package (CL/alexandria exports leak into the
-      ;; SECD-LISP package via :use; they are treated as global)
-      ((or (find #\: sname)
-           (keywordp name)
+      ;; Qualified (pkg:name): rewrite the pkg prefix through the alias table
+      ;; so we land on the same canonical key the library actually used.
+      ((find #\: sname)
+       (let* ((col (position #\: sname))
+              (pkg (subseq sname 0 col))
+              (tail (subseq sname col))
+              (real (resolve-package-alias context pkg)))
+         (if (string-equal real pkg)
+             name
+             (intern (concatenate 'string real tail) "SECD-LISP"))))
+      ;; keyword, t/nil, or a symbol from another package (CL/alexandria
+      ;; names leak into the SECD-LISP package via :use; they are treated
+      ;; as global)
+      ((or (keywordp name)
            (not (eq (symbol-package name) (find-package "SECD-LISP")))
            (or (string= sname "T") (string= sname "NIL")))
        name)
@@ -306,21 +318,37 @@ or (:all) when the refer option is :all."
                       (list :all))
                      (t (list (parse-refer-spec spec)))))))
 
-;;; Parse one library spec of a require node into (PATH-STRING . RULES).
-;;;   :ws2812                -> ("ws2812" . NIL)   ; require, no refer
-;;;   (:ws2812 :refer :all)  -> ("ws2812" . (:all))
+;;; Parse one library spec of a require node into (PATH RULES ALIAS).
+;;;   :ws2812                              -> ("ws2812" NIL NIL)
+;;;   (:ws2812 :refer :all)                -> ("ws2812" (:all) NIL)
+;;;   (:imu/bmi270 :as :bmi270)            -> ("imu/bmi270" NIL "BMI270")
 (defun parse-lib-spec (spec)
-  "Parse one library spec into (PATH-STRING . RULES)."
-  (cons (string-downcase (symbol-name (if (ast-symbol-p spec)
-                                          (ast-node-value spec)
-                                          (application-operator spec))))
-        (if (ast-symbol-p spec)
-            nil
-            (parse-refer-rules spec))))
+  "Parse one library spec into (PATH RULES ALIAS)."
+  (let* ((op (if (ast-symbol-p spec)
+                 (ast-node-value spec)
+                 (application-operator spec)))
+         (path (string-downcase (symbol-name op)))
+         (children (if (ast-symbol-p spec) nil (ast-node-children spec)))
+         (rules (if (ast-symbol-p spec) nil (parse-refer-rules spec)))
+         (alias (parse-as-alias children)))
+    (list path rules alias)))
+
+;;; Parse an :as <name> option from a list of children. Returns the alias
+;;; symbol's name (uppercase string) or NIL.
+(defun parse-as-alias (children)
+  (loop for rest on children
+        for child = (first rest)
+        when (and (ast-symbol-p child)
+                  (keywordp (ast-node-value child))
+                  (string-equal (symbol-name (ast-node-value child)) "AS"))
+          return (let ((spec (second rest)))
+                   (if (and spec (ast-symbol-p spec))
+                       (symbol-name (ast-node-value spec))
+                       (error ":as requires a symbol name")))))
 
 ;;; Library specs of a require node
 (defun parse-lib-specs (node)
-  "Return the library specs of a require node: a list of (PATH . RULES)."
+  "Return the library specs of a require node: a list of (PATH RULES ALIAS)."
   (mapcar #'parse-lib-spec (ast-node-children node)))
 
 ;;; Package descriptors are (REQUIRED REFERS EXPORTS):
@@ -349,16 +377,37 @@ or (:all) when the refer option is :all."
   "Return the (LOCAL . QUALIFIED) alist of package NAME."
   (second (package-descriptor context name)))
 
+;;; Resolve a package alias (set up via (:require :lib :as :alias)) to the
+;;; real package name. Returns the alias itself if no alias is registered.
+(defun resolve-package-alias (context pkg)
+  "Resolve PKG through the current package's alias table, returning the
+real package name."
+  (let* ((cur (compilation-context-current-package context))
+         (desc (and cur (package-descriptor context cur)))
+         (aliases (and desc (third desc))))
+    (or (and aliases (cdr (assoc pkg aliases :test #'string-equal))) pkg)))
+
+;;; Register a package alias in the current package. ALIAS is a string
+;;; (the user-given local name), REAL is the actual library package name.
+(defun register-package-alias (context pkg alias real)
+  "Record that within PKG, the alias ALIAS refers to library package REAL."
+  (ensure-package context pkg)
+  (let ((desc (package-descriptor context pkg))
+        (aliases (third (package-descriptor context pkg))))
+    (setf (third desc)
+          (acons (string-upcase alias) (string-upcase real) aliases))))
+
 ;;; Is PKG usable (loaded/required, declared in this program, or the current
-;;; package itself) from the current package?
+;;; package itself) from the current package? Aliases are followed first.
 (defun package-accessible-p (context pkg)
   "Return non-NIL if PKG can be referenced from the current package."
-  (let ((cur (compilation-context-current-package context)))
-    (or (string-equal pkg cur)
-        (member pkg (package-required context cur) :test #'string=)
+  (let* ((cur (compilation-context-current-package context))
+         (real (resolve-package-alias context pkg)))
+    (or (string-equal real cur)
+        (member real (package-required context cur) :test #'string=)
         ;; packages declared in this program (defpackage/in-package) are
         ;; reachable without require; only libraries need require/load
-        (not (null (package-descriptor context pkg))))))
+        (not (null (package-descriptor context real))))))
 
 ;;; Resolve a function name to its canonical defined symbol
 (defun resolve-function-name (context name)
@@ -372,7 +421,8 @@ Resolves local definitions, then refers/aliases, then global names."
          (unless (package-accessible-p context pkg)
            (error "Package ~A not loaded; add (require :~A) before referencing ~A"
                   pkg (string-downcase pkg) s))
-         name))
+         ;; canonical-sym rewrites through aliases; this is the lookup key
+         (canonical-sym context name)))
       ;; t/nil, keywords, and symbols from other packages (CL/alexandria
       ;; names leak into SECD-LISP via :use) are global
       ((or (string-equal s "T") (string-equal s "NIL")
@@ -420,12 +470,15 @@ Resolves local definitions, then refers/aliases, then global names."
             (cond
               ((string-equal oname "REQUIRE")
                (dolist (spec (parse-lib-specs option))
-                 (let* ((path (car spec))
-                        (rules (cdr spec))
+                 (let* ((path (first spec))
+                        (rules (second spec))
+                        (alias (third spec))
                         (lib-pkg (load-library-file
                                   context
                                   (resolve-library-file path) visited)))
-                   (apply-require context pname lib-pkg rules))))
+                   (apply-require context pname lib-pkg rules)
+                   (when alias
+                     (register-package-alias context pname alias lib-pkg)))))
               ((string-equal oname "EXPORT")
                ;; Record the exported names so (:refer :all) can import them
                (setf (third (package-descriptor context pname))
@@ -638,12 +691,17 @@ raise a descriptive error."
 (defun compile-require-directive (context node visited)
   "Process a top-level (require ...) directive with one or more lib specs."
   (dolist (spec (parse-lib-specs node))
-    (let* ((path (car spec))
-           (rules (cdr spec))
+    (let* ((path (first spec))
+           (rules (second spec))
+           (alias (third spec))
            (lib-pkg (load-library-file context
                                       (resolve-library-file path) visited)))
       (apply-require context (compilation-context-current-package context)
-                     lib-pkg rules))))
+                     lib-pkg rules)
+      (when alias
+        (register-package-alias context
+                                (compilation-context-current-package context)
+                                alias lib-pkg)))))
 
 ;;; Compile a top-level (load "path") directive
 (defun compile-load-directive (context node visited)

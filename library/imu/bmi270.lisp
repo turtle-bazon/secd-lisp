@@ -6,8 +6,9 @@
 ;;;; The BMI270 needs a 8192-byte Bosch config blob uploaded before it will
 ;;;; produce data. The driver here exposes:
 ;;;;
-;;;;   (bmi270:init addr)        — soft-reset, upload config, enable acc+gyr
-;;;;   (bmi270:init addr)
+;;;;   (imu/bmi270:init addr)    — soft-reset, upload config, enable acc+gyr
+;;;;   (imu/bmi270:reg-read addr reg nbytes)
+;;;;   (imu/bmi270:reg-write addr reg value)
 ;;;;                             — read a signed 16-bit sensor word at REG,
 ;;;;                               fold into the 12-bit fixnum range, scale
 ;;;;                               by 1/64, and clamp to the int8 range that
@@ -17,9 +18,11 @@
 ;;;; BMI270:+PWR-CTRL+).
 ;;;;
 ;;;; Use from a program with:
-;;;;   (defpackage :my-app (:require (:imu/bmi270)))
+;;;;   (defpackage :my-app (:require (:imu/bmi270 :as :bmi270)))
+;;;;   (defpackage :my-app (:require (:imu/bmi270 :refer :all)))
+;;;;   (defpackage :my-app (:require (:imu/bmi270 :as :bmi270 :refer :all)))
 
-(defpackage :bmi270
+(defpackage :imu/bmi270
   (:export init)
   (:export +CHIP-ID+ +ACC-X-LSB+ +GYR-X-LSB+ +GYR-Y-LSB+ +INTERNAL-STATUS+
            +INT-MAP-DATA+ +INIT-CTRL+ +INIT-ADDR-0+ +PWR-CONF+ +PWR-CTRL+

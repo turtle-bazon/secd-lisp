@@ -8,17 +8,17 @@
 ;;;; carry a press/release bit (bit 7) and a key number (0..79 in the lower
 ;;;; 7 bits). The driver here exposes:
 ;;;;
-;;;;   (tca8418:init addr)         — configure the chip for a 7x8 matrix
-;;;;   (tca8418:event-count addr)  — pending events in the FIFO (low 4 bits)
-;;;;   (tca8418:event addr)        — read one event; returns (press . key) or nil
+;;;;   (keypad/tca8418:init addr)         — configure the chip for a 7x8 matrix
+;;;;   (keypad/tca8418:event-count addr)  — pending events in the FIFO (low 4 bits)
+;;;;   (keypad/tca8418:event addr)        — read one event; returns (press . key) or nil
 ;;;;
-;;;; Register names are exported as +CONSTANT+ (e.g. TCA8418:+CFG+,
-;;;; TCA8418:+EVENT+) so the constant convention is visible at call sites.
+;;;; Register names are exported as +CONSTANT+ (e.g. KEYPAD/TCA8418:+CFG+,
+;;;; KEYPAD/TCA8418:+EVENT+) so the constant convention is visible at call sites.
 ;;;;
 ;;;; Use from a program with:
-;;;;   (defpackage :my-app (:require (:keypad/tca8418)))
+;;;;   (defpackage :my-app (:require (:keypad/tca8418 :as :tca8418)))
 
-(defpackage :tca8418
+(defpackage :keypad/tca8418
   (:export init event-count event)
   ;;; Register addresses (see TCA8418 datasheet).
   (:export +CFG+ +INT-STAT+ +COUNT+ +EVENT+ +INT-EN-1+ +INT-EN-2+ +INT-EN-3+
