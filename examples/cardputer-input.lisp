@@ -36,6 +36,11 @@
 (defconstant +i2c-scl+ 9)
 (defconstant +i2c-khz+ 400)
 
+;; Bus index returned by %i2c-init at runtime (0..N-1). The libraries
+;; take this as their first argument; main() sets it once and then
+;; the rest of the program uses it for every transfer.
+(defvar *i2c-bus* 0)
+
 ;; Board wiring: devices on the internal I2C bus.
 (defconstant +kbd-addr+ 0x34)         ; TCA8418
 (defconstant +imu-addr+ 0x69)         ; BMI270 (0x68 does not ACK)
@@ -122,7 +127,7 @@
 
 ;;; Read one event, remap the TCA8418 key number to a Cardputer (row,col).
 (defun kbd-event (mods fn)
-  (let ((ev (tca8418:event +kbd-addr+)))
+  (let ((ev (tca8418:event *i2c-bus* +kbd-addr+)))
     (if (= ev nil)
         nil
         (let ((press (car ev))
@@ -138,7 +143,7 @@
 
 ;;; Drain any pending events.
 (defun kbd-scan (mods fn)
-  (let ((count (tca8418:event-count +kbd-addr+)))
+  (let ((count (tca8418:event-count *i2c-bus* +kbd-addr+)))
     (if (> count 0)
         (progn
           (print count)
@@ -155,8 +160,8 @@
 ;;;; Signed 16-bit sensor word at REG, folded into the 12-bit fixnum range
 ;;;; and scaled by 1/64: r/64 = b0/64 + 4*b1, minus 1024 when the high byte
 ;;;; >= 128 (negative), then clamped to the mouse's int8 range. No shifts.
-(defun word-scale (addr reg)
-  (let ((v (bmi270:reg-read addr reg 2)))
+(defun word-scale (bus addr reg)
+  (let ((v (bmi270:reg-read bus addr reg 2)))
     (let ((b0 (vref v 0))
           (b1 (vref v 1)))
       (clamp-mouse (- (+ (/ b0 64) (* 4 b1))
@@ -167,9 +172,9 @@
   (%usb-hid-add)                  ; HID keyboard interface
   (%usb-mouse-add)                ; HID mouse interface
   (%usb-start)                    ; freeze + enumerate
-  (print (%i2c-init +i2c-sda+ +i2c-scl+ +i2c-khz+))
-  (tca8418:init +kbd-addr+)
-  (bmi270:init +imu-addr+)
+  (setf *i2c-bus* (%i2c-init +i2c-sda+ +i2c-scl+ +i2c-khz+))
+  (tca8418:init *i2c-bus* +kbd-addr+)
+  (bmi270:init *i2c-bus* +imu-addr+)
   (let ((mods (make-vector 1))    ; held Ctrl/Shift/Alt bits
         (fn (make-vector 1))      ; FN-layer flag
         (tick 0))                 ; heartbeat counter
@@ -177,11 +182,11 @@
       (kbd-scan mods fn)
       (setf tick (+ tick 1))
       ;; Roll -> pointer X, pitch -> pointer Y.
-      (%hid-mouse 0 (word-scale +imu-addr+ bmi270:+GYR-Y-LSB+)
-                  (word-scale +imu-addr+ bmi270:+GYR-X-LSB+) 0)
+      (%hid-mouse 0 (word-scale *i2c-bus* +imu-addr+ bmi270:+GYR-Y-LSB+)
+                  (word-scale *i2c-bus* +imu-addr+ bmi270:+GYR-X-LSB+) 0)
       (if (= 0 (mod tick 10))
           (progn
-            (print (word-scale +imu-addr+ bmi270:+GYR-Y-LSB+))
-            (print (word-scale +imu-addr+ bmi270:+GYR-X-LSB+)))
+            (print (word-scale *i2c-bus* +imu-addr+ bmi270:+GYR-Y-LSB+))
+            (print (word-scale *i2c-bus* +imu-addr+ bmi270:+GYR-X-LSB+)))
           nil)
       (%sleep 10))))

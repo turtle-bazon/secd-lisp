@@ -6,8 +6,8 @@
 ;;;; The BMI270 needs a 8192-byte Bosch config blob uploaded before it will
 ;;;; produce data. The driver here exposes:
 ;;;;
-;;;;   (imu/bmi270:init addr)    — soft-reset, upload config, enable acc+gyr
-;;;;   (imu/bmi270:reg-read addr reg nbytes)
+;;;;   (imu/bmi270:init bus addr)    — soft-reset, upload config, enable acc+gyr
+;;;;   (imu/bmi270:reg-read bus addr reg nbytes)
 ;;;;   (imu/bmi270:reg-write addr reg value)
 ;;;;                             — read a signed 16-bit sensor word at REG,
 ;;;;                               fold into the 12-bit fixnum range, scale
@@ -41,19 +41,19 @@
 (defconstant +CMD+ 0x7E)
 (defconstant +SOFT-RESET+ 0xB6)
 
-(defun reg-write (addr reg value)
-  (%i2c-write addr (list reg value)))
+(defun reg-write (bus addr reg value)
+  (%i2c-write bus addr (list reg value)))
 
-(defun reg-read (addr reg nbytes)
-  (%i2c-write-read addr (list reg) nbytes))
+(defun reg-read (bus addr reg nbytes)
+  (%i2c-write-read bus addr (list reg) nbytes))
 
 ;;; Poll BMI270 register REG until it reads non-zero (bounded busy-wait).
-(defun poll-nonzero (addr reg steps)
+(defun poll-nonzero (bus addr reg steps)
   (if (= steps 0)
       t
-      (if (not (= (vref (reg-read addr reg 1) 0) 0))
+      (if (not (= (vref (reg-read bus addr reg 1) 0) 0))
           t
-          (poll-nonzero addr reg (- steps 1)))))
+          (poll-nonzero bus addr reg (- steps 1)))))
 
 ;;; Bosch bmi270_config_file (8192 bytes) with the INIT_DATA_ADDR register
 ;;; byte (94 = 0x5E) as element 0 so one %i2c-write-v uploads it all.
@@ -575,19 +575,19 @@
 
 ;;; Bring up the BMI270: soft-reset, upload the 8192-byte Bosch config
 ;;; blob, wait for the config engine to finish, then enable acc+gyr.
-(defun init (addr)
-  (reg-write addr +CMD+ +SOFT-RESET+)
+(defun init (bus addr)
+  (reg-write bus addr +CMD+ +SOFT-RESET+)
   (%sleep 5)
-  (poll-nonzero addr +PWR-CONF+ 32)
+  (poll-nonzero bus addr +PWR-CONF+ 32)
   ;; The chip should answer 0x24 (36); print what we actually read.
-  (print (vref (reg-read addr +CHIP-ID+ 1) 0))
-  (reg-write addr +PWR-CONF+ 0)
-  (%i2c-write addr (list +INIT-ADDR-0+ 0 0))
-  (%i2c-write-v addr +CONFIG+)
-  (reg-write addr +INIT-CTRL+ 1)
-  (reg-write addr +INT-MAP-DATA+ 255)
-  (poll-nonzero addr +INTERNAL-STATUS+ 32)
+  (print (vref (reg-read bus addr +CHIP-ID+ 1) 0))
+  (reg-write bus addr +PWR-CONF+ 0)
+  (%i2c-write bus addr (list +INIT-ADDR-0+ 0 0))
+  (%i2c-write-v bus addr +CONFIG+)
+  (reg-write bus addr +INIT-CTRL+ 1)
+  (reg-write bus addr +INT-MAP-DATA+ 255)
+  (poll-nonzero bus addr +INTERNAL-STATUS+ 32)
   ;; Config engine is now running, but ACC and GYR are still suspended until
   ;; we turn them on via PWR_CTRL. Without this the data registers read 0.
-  (reg-write addr +PWR-CTRL+ 0b11))   ; 0x03 = acc_en(0) | gyr_en(1)
+  (reg-write bus addr +PWR-CTRL+ 0b11))   ; 0x03 = acc_en(0) | gyr_en(1)
 

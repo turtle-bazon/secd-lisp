@@ -8,9 +8,9 @@
 ;;;; carry a press/release bit (bit 7) and a key number (0..79 in the lower
 ;;;; 7 bits). The driver here exposes:
 ;;;;
-;;;;   (keypad/tca8418:init addr)         — configure the chip for a 7x8 matrix
-;;;;   (keypad/tca8418:event-count addr)  — pending events in the FIFO (low 4 bits)
-;;;;   (keypad/tca8418:event addr)        — read one event; returns (press . key) or nil
+;;;;   (keypad/tca8418:init bus addr)         — configure the chip for a 7x8 matrix
+;;;;   (keypad/tca8418:event-count bus addr)  — pending events in the FIFO (low 4 bits)
+;;;;   (keypad/tca8418:event bus addr)        — read one event; returns (press . key) or nil
 ;;;;
 ;;;; Register names are exported as +CONSTANT+ (e.g. KEYPAD/TCA8418:+CFG+,
 ;;;; KEYPAD/TCA8418:+EVENT+) so the constant convention is visible at call sites.
@@ -48,51 +48,51 @@
 (defconstant +INT-LVL-2+ 0x27)
 (defconstant +INT-LVL-3+ 0x28)
 
-(defun reg-write (addr reg value)
-  (%i2c-write addr (list reg value)))
+(defun reg-write (bus addr reg value)
+  (%i2c-write bus addr (list reg value)))
 
-(defun reg-read (addr reg nbytes)
-  (%i2c-write-read addr (list reg) nbytes))
+(defun reg-read (bus addr reg nbytes)
+  (%i2c-write-read bus addr (list reg) nbytes))
 
 ;;; Drain the key-event FIFO (KEY_EVENT_A reads 0 once empty).
-(defun drain (addr)
-  (if (= (vref (reg-read addr +EVENT+ 1) 0) 0)
+(defun drain (bus addr)
+  (if (= (vref (reg-read bus addr +EVENT+ 1) 0) 0)
       t
-      (drain addr)))
+      (drain bus addr)))
 
 ;;; Begin/flush: configure for a 7x8 matrix and clear pending state.
-(defun init (addr)
+(defun init (bus addr)
   ;; All GPIOs input, key-event mode, falling edge, interrupt-enabled.
-  (reg-write addr +DIR-1+ 0)
-  (reg-write addr +DIR-2+ 0)
-  (reg-write addr +DIR-3+ 0)
-  (reg-write addr +GPI-EM-1+ 0xFF)
-  (reg-write addr +GPI-EM-2+ 0xFF)
-  (reg-write addr +GPI-EM-3+ 0xFF)
-  (reg-write addr +INT-LVL-1+ 0)
-  (reg-write addr +INT-LVL-2+ 0)
-  (reg-write addr +INT-LVL-3+ 0)
-  (reg-write addr +INT-EN-1+ 0xFF)
-  (reg-write addr +INT-EN-2+ 0xFF)
-  (reg-write addr +INT-EN-3+ 0xFF)
+  (reg-write bus addr +DIR-1+ 0)
+  (reg-write bus addr +DIR-2+ 0)
+  (reg-write bus addr +DIR-3+ 0)
+  (reg-write bus addr +GPI-EM-1+ 0xFF)
+  (reg-write bus addr +GPI-EM-2+ 0xFF)
+  (reg-write bus addr +GPI-EM-3+ 0xFF)
+  (reg-write bus addr +INT-LVL-1+ 0)
+  (reg-write bus addr +INT-LVL-2+ 0)
+  (reg-write bus addr +INT-LVL-3+ 0)
+  (reg-write bus addr +INT-EN-1+ 0xFF)
+  (reg-write bus addr +INT-EN-2+ 0xFF)
+  (reg-write bus addr +INT-EN-3+ 0xFF)
   ;; matrix(7,8): 7 rows + 8 columns.
-  (reg-write addr +KP-GPIO-1+ 0x7F)
-  (reg-write addr +KP-GPIO-2+ 0xFF)
+  (reg-write bus addr +KP-GPIO-1+ 0x7F)
+  (reg-write bus addr +KP-GPIO-2+ 0xFF)
   ;; flush: drain events, clear GPIO status + INT_STAT.
-  (drain addr)
-  (reg-read addr +GPIO-INT-STAT-1+ 1)
-  (reg-read addr +GPIO-INT-STAT-2+ 1)
-  (reg-read addr +GPIO-INT-STAT-3+ 1)
-  (reg-write addr +INT-STAT+ 3))
+  (drain bus addr)
+  (reg-read bus addr +GPIO-INT-STAT-1+ 1)
+  (reg-read bus addr +GPIO-INT-STAT-2+ 1)
+  (reg-read bus addr +GPIO-INT-STAT-3+ 1)
+  (reg-write bus addr +INT-STAT+ 3))
 
 ;;; Pending event count (low 4 bits of KEY_LCK_EC).
-(defun event-count (addr)
-  (mod (vref (reg-read addr +COUNT+ 1) 0) 16))
+(defun event-count (bus addr)
+  (mod (vref (reg-read bus addr +COUNT+ 1) 0) 16))
 
 ;;; Read one event: returns (press . key-number) or nil if FIFO is empty
 ;;; or the key number is out of range.
-(defun event (addr)
-  (let ((ev (vref (reg-read addr +EVENT+ 1) 0)))
+(defun event (bus addr)
+  (let ((ev (vref (reg-read bus addr +EVENT+ 1) 0)))
     (let ((press (>= ev 0x80))
           (kn (- (mod ev 0x80) 1)))
       (if (< kn 0)
