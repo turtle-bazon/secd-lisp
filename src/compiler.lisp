@@ -853,6 +853,12 @@ raise a descriptive error."
     ;; Byte-vector literal #( ... )
     (:byte-vector
      (emit-bytevec-literal context (ast-node-value node)))
+
+    ;; String literal "..." — emit as ASCII byte-vector (the VM has no
+    ;; string type; primitives like %usb-vendor take byte-vectors).
+    (:string
+     (let ((chars (coerce (ast-node-value node) 'list)))
+       (emit-bytevec-literal context (mapcar #'char-code chars))))
     
     ;; Boolean literal
     (:boolean

@@ -171,8 +171,8 @@
   (%usb-init)
   (%usb-vid 0x1209)                          ; placeholder VID
   (%usb-pid 0x4D35)                          ; placeholder PID ("MS")
-  (%usb-vendor #(0x4D 0x35 0x53 0x54 0x41 0x43 0x4B))    ; "M5STACK"
-  (%usb-product #(0x43 0x41 0x52 0x44 0x50 0x55 0x54 0x45 0x52))    ; "CARDPUTER"
+  (%usb-vendor "M5STACK")
+  (%usb-product "CARDPUTER")
   (%usb-hid-keyboard-add)        ; HID keyboard interface
   (%usb-hid-mouse-add)            ; HID mouse interface
   (%usb-start)                    ; freeze + enumerate
